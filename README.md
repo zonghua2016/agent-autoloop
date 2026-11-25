@@ -125,7 +125,7 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 ```
 ````
 
-除了提问（`ask`），还能发通知（`notice`）、关闭已解决的卡片（`resolve`）、预约复查（`later`）和触发新事件（`events`）。通告不需要回答，但结案时可以顺手写一句处理说明，这句话会留在卡片上；只是告诉一声的通告标成 `fyi`，不带按钮。万一 JSON 写错了，中台只让它在原会话里重写最后这段回复，不会把已经干完的业务重做一遍；重写也失败时，保留原结论并通知你回执没有生效（通用命令没有会话，直接走这一步）。接着旧会话跑也一样：会话接不上才开新的；接上了、干到一半断了，就算没跑成，过几分钟回到原会话重试，不开新会话重做。同一事项的新事件默认开新会话；规则写 `"resume": true` 就接着上一轮的会话。
+除了提问（`ask`），还能发通知（`notice`）、关闭已解决的卡片（`resolve`）、预约复查（`later`）和触发新事件（`events`）。通告不需要回答，但结案时可以顺手写一句处理说明，这句话会留在卡片上；只是告诉一声的通告标成 `fyi`，不带按钮。万一 JSON 写错了，中台只让它在原会话里重写最后这段回复，不会把已经干完的业务重做一遍；重写也失败时，保留原结论并通知你回执没有生效（通用命令没有会话，直接走这一步）。接着旧会话跑也一样：会话接不上才开新的；接上了、干到一半断了，就算没跑成，过几分钟回到原会话重试，不开新会话重做。同一事项的新事件默认开新会话；规则写 `"resume": true` 就接着上一轮的会话。Claude Code 的订阅用量到了上限，中台按它报的恢复时间停止给它派活，排着的和新来的事件都留着，到点自动接着派，并通知你一次几点恢复。
 
 ## 拿来即用的场景模板
 
@@ -154,12 +154,12 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 
 | 方向 | 内置 | 配置 |
 |---|---|---|
-| **事件**：怎么发现新活 | [GitHub Webhook](plugins/github/source.ts)、[GitLab Webhook](plugins/gitlab/source.ts)、[HTTP 接口](docs/protocol.md#来源把世界变成事件)、[定时规则](skills/agent-autoloop/SKILL.md#改规则)、[Issue 轮询脚本](examples/watch-github-issues.sh) | [说明](skills/agent-autoloop/SKILL.md#接一个事件插件) |
+| **事件**：怎么发现新活 | [GitHub Webhook](plugins/github/source.ts)、[GitLab Webhook](plugins/gitlab/source.ts)、[HTTP 接口](docs/protocol.md#来源把世界变成事件)、[定时规则](skills/agent-autoloop/SKILL.md#改规则)、[Issue 轮询脚本](examples/recipes/github-issues/watch.ts) | [说明](skills/agent-autoloop/SKILL.md#接一个事件插件) |
 | **Agent**：谁来干活 | [Claude Code](plugins/claude/agent.ts)、[Codex](plugins/codex/agent.ts)、[ACP](plugins/acp/agent.ts)、[DeepSeek Harness](plugins/dsh/agent.ts)、[ZCode](plugins/zcode/agent.ts)、[通用命令](plugins/command/agent.ts) | [说明](skills/agent-autoloop/SKILL.md#接一个-agent) |
 | **通道**：去哪找你拍板 | [桌面通知](plugins/desktop/channel.ts)（默认开启）、[飞书](plugins/feishu/channel.ts)、[钉钉 / 企微 / Slack / Discord](plugins/webhook/templates.ts) | [说明](skills/agent-autoloop/SKILL.md#接一个通道) |
 | **交付**：把 CI/CD 也做成插件 | [`delivery`](plugins/delivery/delivery.ts) | [说明](skills/agent-autoloop/SKILL.md#交付流水线) |
 
-**实测情况：** Claude Code、Codex 和 ACP（官方 Codex ACP 适配器）跑通了多轮问答和跨进程会话续接；ZCode 跑通了提问、回答后接回原会话；飞书跑通了发送、按钮回调和卡片更新；四种 Webhook 模板只在本地模拟服务上验证过，GitLab Webhook 按官方文档的格式测试，没连过真实 GitLab。这些文字通道靠回答链接拍板，要把 `hub.publicUrl` 配成手机或电脑能打开的地址。
+**实测情况：** Claude Code、Codex 和 ACP（官方 Codex ACP 适配器）跑通了多轮问答和跨进程会话续接；ZCode 跑通了提问、回答后接回原会话；[Agentica](https://github.com/shibing624/agentica) 1.6.1 用 `use: "acp"` 跑通了多轮问答和跨进程会话续接；飞书跑通了发送、按钮回调和卡片更新；四种 Webhook 模板只在本地模拟服务上验证过，GitLab Webhook 按官方文档的格式测试，没连过真实 GitLab。这些文字通道靠回答链接拍板，要把 `hub.publicUrl` 配成手机或电脑能打开的地址。
 
 **内置 Agent 走第三方网关。** Claude Code、Codex 要接第三方模型服务，或者启动前要先设好环境变量，写一个设好变量再启动它的小脚本，在 Agent 里写 `"program": "脚本路径"`，会话续接和用量统计照旧，见[说明](skills/agent-autoloop/SKILL.md#接一个-agent)。
 
@@ -176,7 +176,7 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 
 OpenClaw 的 `agent exec` 每次默认最多跑 600 秒，到点就算失败；要跑更久的，在命令里加 `--timeout <秒>`（`0` 不限时）。
 
-会说 ACP 的 Agent 用 `use: "acp"` 接，还能接着原来的会话做：[Gemini CLI](https://geminicli.com/docs/cli/acp-mode/) 写 `"command": ["gemini", "--acp"]`，[OpenCode](https://opencode.ai/docs/acp) 写 `"command": ["opencode", "acp"]`，Antigravity 写 `"command": ["agy", "acp"]`。Gemini CLI 0.67.0 和 OpenCode 1.1.2 已经跑通 ACP 握手，多轮问答和会话续接还没跑过。Antigravity（agy 1.5.5）在 Windows 上跑通了多轮问答和会话续接。
+会说 ACP 的 Agent 用 `use: "acp"` 接，还能接着原来的会话做：[Agentica](https://github.com/shibing624/agentica) 1.6.1 写 `"command": ["agentica", "acp"]`，[Gemini CLI](https://geminicli.com/docs/cli/acp-mode/) 写 `"command": ["gemini", "--acp"]`，[OpenCode](https://opencode.ai/docs/acp) 写 `"command": ["opencode", "acp"]`，Antigravity 写 `"command": ["agy", "acp"]`。Agentica 已跑通多轮问答和跨进程会话续接（同一个 `sessionId` 走 `session/load`）；它的 ACP 会话默认放在 `~/.agentica/acp/sessions`，可用 `AGENTICA_ACP_SESSION_DIR` 换目录。只要单轮、不需要会话续接，也可以 `use: "command"` + `["agentica", "--query", "{prompt}", "--print"]`，实测跑通一轮，但没有用量统计和会话续接。Gemini CLI 0.67.0 和 OpenCode 1.1.2 已经跑通 ACP 握手，多轮问答和会话续接还没跑过。Antigravity（agy 1.5.5）在 Windows 上跑通了多轮问答和会话续接。
 
 **交付流水线。** 配好交付规则后，给 GitHub PR 打上 `deliver` 标签后，它会自己跟进到上线：**审代码 → 等 CI → 合并 PR → 等部署 → 核对线上版本**。审查可以按写代码的 Agent 指定，也可以让多个项目共用一份策略。审查和交付配置只从 `main` 读取，绝不在接单电脑上检出或运行 PR 里的代码；排队、并发和重试直接复用内核。
 
@@ -228,10 +228,10 @@ Apple M5 Pro、24 GB、Node 24.21.0。写入逐条提交，事务落盘后才应
 | 持久化写入 | 2394 条/秒 |
 | 派活 p99 | 1.82 ms |
 | 排队 5000 时被挡下的心跳 p99 | 1.66 ms |
-| 110 万条事实时的启动 | 99.8 ms |
+| 110 万条事实时的启动 | 112.3 ms |
 | 运行时依赖 | 0 |
 
-历史变大后，状态汇总会变慢，日志和索引也继续占磁盘；格式变化后的首次启动要从日志全量重建，110 万条用时 43.1 秒。[完整数据和测法](docs/protocol.md#历史增长实测)。
+历史变大后，状态汇总会变慢，日志和索引也继续占磁盘；格式变化后的首次启动要从日志全量重建，110 万条用时 48.2 秒。[完整数据和测法](docs/protocol.md#历史增长实测)。
 
 ## 用量与合规说明
 

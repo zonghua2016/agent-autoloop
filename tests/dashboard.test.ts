@@ -396,3 +396,27 @@ test("owner login replaces old sessions without locking the owner out", async ()
     await app.close();
   }
 });
+
+test("the timeline preserves an unconfirmed stop without promising process termination", async () => {
+  const path = "../examples/recipes/live-dashboard/timeline.mjs";
+  const { projectTimeline } = await import(path);
+  const rows = projectTimeline(7, [
+    {
+      at: "2026-11-25T00:00:00Z",
+      changes: [
+        {
+          table: "runs",
+          key: "7",
+          row: {
+            id: 7,
+            state: "cancelled",
+            finished_at: "2026-11-25T00:00:00Z",
+            summary: "本人不再等了",
+            error: "进程可能还在",
+          },
+        },
+      ],
+    },
+  ]).rows;
+  assert.ok(rows.some((row: any) => row.title === "本轮已结束" && row.detail.includes("进程可能还在")));
+});

@@ -23,6 +23,7 @@ const VIEWS = {
   seen: "kind name seen_at",
   keys: "kind name hash created_at",
   pauses: "name by reason since until",
+  limits: "agent until reason since",
 };
 
 /** Made anew at every start, so changing them takes no rebuild and no migration. */
@@ -123,6 +124,48 @@ export function skippedOf(all: Reads["all"], rule: string, since: string, everyt
   return { count, events: events.map(skippedView) };
 }
 
+/** A rule's tags by its name, as the rules are now: none for one without them or no longer there. */
+function tagsOf(rules: Rules) {
+  const tags = new Map(rules.rules.map((rule) => [rule.name, rule.tags ?? []]));
+  return (rule: string) => tags.get(rule) ?? [];
+}
+
+function runView(run: Row, all: Reads["all"], tags: string[]) {
+  return {
+    id: run.id as number,
+    rule: run.rule,
+    tags,
+    agent: run.agent,
+    state: run.state,
+    attempts: run.attempts,
+    createdAt: run.created_at,
+    claimedAt: run.claimed_at,
+    finishedAt: run.finished_at,
+    notBefore: run.not_before,
+    summary: run.summary ?? "",
+    error: run.error ?? "",
+    link: run.link ?? "",
+    session: run.session,
+    usage: run.usage ? JSON.parse(run.usage) : null,
+    stopping: run.cancel_at !== null,
+    manual: Boolean(run.manual),
+    events: all<Row>(EVENTS_OF_RUN, [run.id]),
+  };
+}
+
+export function ruleHistory(all: Reads["all"], rules: Rules, rule: string, before?: number) {
+  const limit = 20;
+  const rows = all<Row>(
+    `SELECT * FROM runs WHERE rule = ? AND state NOT IN ('queued', 'claimed') ${before === undefined ? "" : "AND id < ?"}
+     ORDER BY id DESC LIMIT ?`,
+    before === undefined ? [rule, limit + 1] : [rule, before, limit + 1],
+  );
+  return {
+    runs: rows.slice(0, limit).map((run) => runView(run, all, tagsOf(rules)(rule))),
+    nextBefore: rows.length > limit ? rows[limit - 1].id : null,
+  };
+}
+
 export function stateOf(now: number, before: number | undefined, rules: Rules, { all, view, unrouted }: Reads) {
   const seen = new Map(
     all<Row>("SELECT kind, name, seen_at FROM seen").map((row) => [`${row.kind}:${row.name}`, row.seen_at as string]),
@@ -167,6 +210,7 @@ export function stateOf(now: number, before: number | undefined, rules: Rules, {
     const { by, reason, since, until, skipped } = pause;
     return { by, reason, since, until, skipped };
   };
+  const tags = tagsOf(rules);
   const skippedAt = new Map(
     all<Row>("SELECT rule, skipped_at FROM schedules").map((row) => [row.rule, row.skipped_at]),
   );
@@ -178,10 +222,17 @@ export function stateOf(now: number, before: number | undefined, rules: Rules, {
     timezone: rules.timezone,
     spending: spendingOf(all, now, rules.timezone),
     totals: { ...tally(counts), attention: openCards.length },
-    // The owner's own: which matter a card is about, and what its asker left for whoever carries on. Channels don't get them.
-    cards: openCards.map((card) => ({ ...view(card), lane: card.lane, about: card.about, runId: card.run_id ?? null })),
+    // The owner also sees the originating run and private continuation context; channels only receive lane and tags.
+    cards: openCards.map((card) => ({
+      ...view(card),
+      tags: tags(card.rule),
+      lane: card.lane,
+      about: card.about,
+      runId: card.run_id ?? null,
+    })),
     recentCards: recentCards.map((card) => ({
       ...view(card),
+      tags: tags(card.rule),
       lane: card.lane,
       about: card.about,
       runId: card.run_id ?? null,
@@ -195,6 +246,7 @@ export function stateOf(now: number, before: number | undefined, rules: Rules, {
       id: rule.name,
       name: rule.name,
       group: rule.group,
+      tags: rule.tags ?? [],
       agent: rule.to,
       source: eventRule(rule) ? rule.when.source : SCHEDULE,
       types: eventRule(rule) ? rule.when.types : [],
@@ -213,7 +265,10 @@ export function stateOf(now: number, before: number | undefined, rules: Rules, {
     }),
     agents: Object.entries(rules.agents).map(([id, { name, use, worker, program }]) => {
       const totals = tally(counts.filter((row) => row.agent === id));
-      return { id, name, use, worker, ...(program && { program }), ...presence(`worker:${worker}`), totals };
+      // Like a pause, one past its end is lifted at the next tick and already holds nothing.
+      const limit = all<Row>("SELECT until, reason, since FROM limits WHERE agent = ?", [id])[0];
+      const limited = limit && Date.parse(limit.until) > now ? limit : null;
+      return { id, name, use, worker, ...(program && { program }), ...presence(`worker:${worker}`), totals, limited };
     }),
     channels: Object.entries(rules.channels).map(([id, { name }]) => {
       // Coming back says the channel's program runs, not that a card got through: the last one it was given says that.
@@ -228,25 +283,7 @@ export function stateOf(now: number, before: number | undefined, rules: Rules, {
         : undefined;
       return { id, name, ...presence(`channel:${id}`), ...(lastFailure && { lastFailure }) };
     }),
-    runs: visible.map((run) => ({
-      id: run.id as number,
-      rule: run.rule,
-      agent: run.agent,
-      state: run.state,
-      attempts: run.attempts,
-      createdAt: run.created_at,
-      claimedAt: run.claimed_at,
-      finishedAt: run.finished_at,
-      notBefore: run.not_before,
-      summary: run.summary ?? "",
-      error: run.error ?? "",
-      link: run.link ?? "",
-      session: run.session,
-      usage: run.usage ? JSON.parse(run.usage) : null,
-      stopping: run.cancel_at !== null,
-      manual: Boolean(run.manual),
-      events: all<Row>(EVENTS_OF_RUN, [run.id]),
-    })),
+    runs: visible.map((run) => runView(run, all, tags(run.rule))),
     hasMore,
     nextBefore: hasMore ? page[PAGE - 1].id : null,
     unrouted: unrouted(),

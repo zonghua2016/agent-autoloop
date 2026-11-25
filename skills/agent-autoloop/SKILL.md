@@ -11,7 +11,9 @@ description: 配置 Agent 自动化中台：加规则、接新的事件插件、
 
 ## 看情况、回答
 
-`agent-autoloop status` 列出谁在线、等用户什么、在做什么、做过什么，还有按完成时间统计的今天和最近 7 天的轮数、Token 和费用（Token 含缓存，写出其中缓存占多少；同一轮重试的已报用量相加，没上报的轮数会写出来）。终端里它带颜色，接管道、被 Agent 调用或设了 `NO_COLOR` 时是纯文本。`agent-autoloop status --json` 输出 `/v1/state` 的原样结构，给脚本和看板用。`agent-autoloop answer <卡片> <序号>` 回答，`agent-autoloop resolve <卡片> <结果>` 结案，`agent-autoloop stop <第几轮>` 停掉一轮，等整个进程组退出才报告已停。
+`agent-autoloop status` 列出谁在线、等用户什么、在做什么、做过什么，还有按完成时间统计的今天和最近 7 天的轮数、Token 和费用（Token 含缓存，写出其中缓存占多少；同一轮重试的已报用量相加，没上报的轮数会写出来）。终端里它带颜色，接管道、被 Agent 调用或设了 `NO_COLOR` 时是纯文本。`agent-autoloop status --json` 输出 `/v1/state` 的原样结构，给脚本和看板用。`agent-autoloop answer <卡片> <序号>` 回答，`agent-autoloop resolve <卡片> <结果>` 结案，`agent-autoloop stop <第几轮>` 停掉一轮：在跑的等整个进程组退出才报告已停；已经没有回音（`status` 里写着不确定）的一轮直接结束，不再收它后来交的结果。
+
+用户说 Agent 额度用完了、中台还在一轮轮派活时：内置的 Claude Code 插件已经会报恢复时间，中台到那时前不派活给这个 Agent，排着的事件到点自动接着做，不用暂停规则或调小 `parallel`；`status` 在这个 Agent 后面写着几点恢复。想提前试，对用它的一条规则 `agent-autoloop run`，跑通就恢复派活。别的 CLI 要有这个行为，在它的插件 `read` 里返回 `limitedUntil`（见 `docs/plugins.md`）。
 
 续接会话也只算这次新增的用量。`~/.agent-autoloop/worker/usage/` 存着相减要用的累计值，没有记录的续接（比如删了这个目录）这次不报 Codex 的 Token 和 Claude Code 的费用，下一次恢复正常。本人打开链接在同一个会话里接着聊用掉的量，会算进下一次续接。旧回执不重算。
 
@@ -32,6 +34,7 @@ description: 配置 Agent 自动化中台：加规则、接新的事件插件、
 - 对话这类要马上回的活，不想排在批量的长任务后面：把批量的规则都写进同一个 `group`，`parallel` 写得比 `worker.capacity` 小，留下的名额长任务占不了，对话来了直接领。比如 `capacity` 是 4，批量那组写 `"group": "batch", "parallel": 3`。同一组的规则 `parallel` 写成一样的。
 - 同组一共并行三轮，但单条规则每次只跑一轮时，在规则里加 `"maxActive": 1`。每个对象仍单独排队。在 `agents` 里也可以给单个 Agent 加 `maxActive`，限制它跨规则同时跑几轮。
 - 同一个对象的新事件要接着上一轮的会话（比如同一个对话的后续消息），就写 `"resume": true`；默认每次开新会话。上一轮被停掉、可能还在跑或者换了 Agent 时开新的。不写 `parallel` 时整条规则的事件都接同一个会话。
+- 规则多了要分组（按项目、团队）时，给规则写 `"tags": ["shop"]`：中台不解释，只原样带进 `/v1/state` 的规则、轮次和卡片，以及这条规则每一轮的资料文件。规则放在一个 `rules.json` 里；几份分开维护的，合并成一份再换上去，先用 `agent-autoloop check` 校验。
 - 一个事项一轮开一个会话、客户端里的会话名字都一样分不清时，给规则写 `"title": "tapd-{id}-测试"`：它单独占提示词第一行，`{subject}` 换成事件的对象，`{id}` 换成对象按 `/ # :` 分开的最后一段。要是字母或数字开头、不含空白的一个词。
 - 要停一条规则，用 `agent-autoloop pause <规则> --reason …`（到点自动恢复加 `--until`），恢复用 `resume <规则>`，现在就跑一轮用 `run <规则>`；不用为了停规则去改 `rules.json`。暂停期间来的事件这条规则不接、也不排队；`resume` 会列出这次暂停跳过的事件，有就如实告诉用户；用户说要补，再运行它给出的 `agent-autoloop replay <规则> --since <时间>`，一次补完、每条只补一次，不用 `run` 一条条补。
 - 改规则前可以先写成草稿，用 `agent-autoloop check <草稿>` 校验，不影响正在跑的中台。
@@ -55,7 +58,7 @@ description: 配置 Agent 自动化中台：加规则、接新的事件插件、
 
 1. **对方能发 HTTP**：`agent-autoloop key new source <名字>` 拿密钥（这是新建密钥，先问用户），`rules.json` 的 `sources` 登记，对方 `POST /v1/events`。对方要知道这件事后来做完没有、结论是什么，用同一把密钥 `GET /v1/events/<应答里的 event>`，不用给它本人的密钥。
 2. **对方有自己的 Webhook 格式**：在 `~/.agent-autoloop/plugins/<名字>/source.ts` 写一个函数，验签并翻译成事件（见 `plugins/github/source.ts`），来源写 `"adapter": "<名字>"`，地址是 `/v1/in/<来源>`，秘密放 `~/.agent-autoloop/secrets.env` 的 `AGENT_AUTOLOOP_SECRET_<来源>`（来源名转大写，`-` 换成 `_`），改完重启中台（`agent-autoloop service install`）。对方要能连到中台，所以中台要在服务器上，或者用隧道。
-3. **对方推不过来，或者中台在家里**：定时跑一段脚本轮询，见 `examples/watch-github-issues.sh`。规则用 `use: "command"` 的 Agent，写上 `emits`。没新东西不花 Token。
+3. **对方推不过来，或者中台在家里**：定时跑一段脚本轮询，见 `examples/recipes/github-issues/watch.ts`（规则里写 `["node", "<路径>", "owner/repo"]`，Windows 也能跑）。规则用 `use: "command"` 的 Agent，写上 `emits`。没新东西不花 Token。
 
 ## 接一个 Agent
 
@@ -108,7 +111,7 @@ Claude 主任务要委托 Codex 操作网页时，从 `examples/recipes/browser-
 "channels": { "feishu": { "key": "…", "user": "ou_用户的 open_id" } }
 ```
 
-同一个飞书应用的卡片点击只能有一个监听，只在一台电脑上跑。
+同一个飞书应用的卡片点击只能有一个监听，只在一台电脑上跑。重启后日志说“飞书那边还记着这个应用的另一条事件连接”，是飞书还没放开旧连接，可能要几个小时；中台每分钟重试一次，期间卡片点击收不到。`lark-cli event status`、`event stop` 只管本机，管不了飞书那边的旧连接；别的电脑也在跑这个应用的监听就先停掉它。
 
 **只会发文字的（钉钉、企微的群机器人，Slack、Discord 的 Webhook）**：用 `plugins/webhook/channel.ts`，`config.json` 的通道项写 `"use": "webhook"`、`"platform": "dingtalk"` 和 `"url": "已有的 Webhook 地址"`；平台也可选 `wecom`、`slack`、`discord`。别的平台只要收 JSON POST 也能接：不写 `platform`，写 `url` 和带 `{text}` 的 `body`，比如 Telegram 写 `"url": "https://api.telegram.org/bot<机器人令牌>/sendMessage"`、`"body": { "chat_id": "…", "text": "{text}" }`。`rules.json` 里写 `"links": true`，卡片链接本身就能回答；`config.json` 的 `hub.publicUrl` 要配成手机或电脑能打开的地址。
 
@@ -138,7 +141,7 @@ Codeup / 云效 Flow 使用独立的 [`plugins/codeup`](../../examples/recipes/c
 
 多个项目共用规则时，在接单命令后加 `--review-policy owner/config:ops/review-policy.json`。插件从这个仓库的 main 读取文件。`reviewers` 按名字给出模型（字符串简写）或 `{ "model": "…", "effort": "xhigh" }`，`default` 是默认审查器名称列表，`agents` 给每种开发 Agent 写列表，空列表免审，同名写两次独立审查两次。`trusted_submitters` 列出可以登记来源的 GitHub 数字账号。深审路径和显式只审查都可覆盖免审。已有分支规则指定审查状态时，用 `--review-status` 传它的名字。
 
-`AGENTS.md` 要有 `## 审查要点`。`review.command` 可用命令数组替换审查程序：提示词从标准输入读，`{input}` 替换成文字差异文件，标准输出必须是 `{"findings":[{"title":"文件:行号和问题","text":"触发条件和后果"}]}`；没问题交空列表。每个审查器最多跑 30 分钟。默认 Codex 忽略用户配置、禁用记忆，只读单独的审查快照。`admin_merge` 默认为空；只有 main 明确列出的 PR 作者才能使用管理员合并。没有线上服务的项目可以省略 `health`，回执会明确写只完成合并。
+`AGENTS.md` 要有 `## 审查要点`。`review.command` 可用命令数组替换审查程序：提示词从标准输入读，`{input}` 替换成文字差异文件，标准输出必须是 `{"findings":[{"level":"挡上线或建议","title":"文件:行号和问题","how":"在项目现在的用法下怎么发生","text":"后果"}]}`；没问题交空列表。只有挡上线的退回改动，建议只记进审查记录。每个审查器最多跑 30 分钟。默认 Codex 忽略用户配置、禁用记忆，只读单独的审查快照。`admin_merge` 默认为空；只有 main 明确列出的 PR 作者才能使用管理员合并。没有线上服务的项目可以省略 `health`，回执会明确写只完成合并。
 
 要按写代码的 Agent 定审查，在 `review` 里加 `agents` 和 `trusted`：
 
@@ -148,13 +151,13 @@ Codeup / 云效 Flow 使用独立的 [`plugins/codeup`](../../examples/recipes/c
   "trusted": [12345678],
   "agents": {
     "codex": null,
-    "claude": { "model": "gpt-6.1-sol", "effort": "xhigh" },
+    "claude": { "model": "gpt-6.2-sol", "effort": "xhigh" },
     "gemini": { "command": ["/绝对路径/reviewer", "{input}"] }
   }
 }
 ```
 
-`agents` 给每个 Agent 写一个审查器：`null` 是免审；`model`、`effort` 是内置 Codex 审查用的模型和推理深度，没写的那项用默认（`gpt-6.1-sol`、`high`）；`command` 换成一条命令，约定同 `review.command`。没列出的 Agent 和没声明来源的改动走默认审查，也就是 `review.command`，没写就是内置 Codex。免审的改动碰到 `xhigh` 的路径或打了 `deliver-review`，照样走默认审查；内置 Codex 在 `xhigh` 的路径上深度不低于 `xhigh`。
+`agents` 给每个 Agent 写一个审查器：`null` 是免审；`model`、`effort` 是内置 Codex 审查用的模型和推理深度，没写的那项用默认（`gpt-6.2-sol`、`high`）；`command` 换成一条命令，约定同 `review.command`。没列出的 Agent 和没声明来源的改动走默认审查，也就是 `review.command`，没写就是内置 Codex。免审的改动碰到 `xhigh` 的路径或打了 `deliver-review`，照样走默认审查；内置 Codex 在 `xhigh` 的路径上深度不低于 `xhigh`。
 
 来源用提交状态声明。整份改动都是同一个 Agent 写的，才在要交付的提交上写这一条，说明里填 Agent 名字（小写字母开头，只用小写字母、数字和 `-`）：
 
@@ -166,7 +169,7 @@ gh api repos/owner/app/statuses/<完整提交编号> -f context=delivery-agent/<
 
 `check.job` 写 job 的名字；矩阵 job（名字像 `check (ubuntu-latest)`）算同一个 job，每一项都要成功。检查工作流的触发类型要带 `ready_for_review`：草稿转 ready 后，只接受这之后新跑的一次检查，而 `pull_request` 默认不在转 ready 时触发。写成 `on: { pull_request: { types: [opened, synchronize, reopened, ready_for_review] } }`。
 
-开始等待检查（草稿先转正式）后超过 10 分钟仍没有新 `pull_request` 检查，或者新检查尚未结束、创建超过 10 分钟仍没有 `check.job` 指定的必需任务，插件会把 PR 转草稿再转正式，重新触发一次，只认可转回正式之后的新检查，并重新计时。前置任务已经完成也不能代替必需任务。同一个提交的自救记录随中台复查保留。重新触发后按同样条件再次卡住时，交付立即退回，说明 GitHub 收下了检查却一直没有开始，等 GitHub 恢复后重新交付。必需任务已经创建、正在排队等机器或执行时继续等待，不因运行时间长而重新触发。其他情况仍最多等待 30 分钟，暂时的 GitHub 或执行错误按原有规则重试。手动触发的 `workflow_dispatch` 检查不作为合并依据。
+开始等待检查（草稿先转正式）后超过 10 分钟仍没有新 `pull_request` 检查，或者新检查尚未结束、创建超过 10 分钟仍没有 `check.job` 指定的必需任务，插件会把 PR 转草稿再转正式，重新触发一次，只认可转回正式之后的新检查，并重新计时。前置任务已经完成也不能代替必需任务。同一个提交的自救记录随中台复查保留。重新触发后按同样条件再次卡住时，交付立即退回，说明 GitHub 收下了检查却一直没有开始，等 GitHub 恢复后重新交付。必需任务已经创建、正在排队等机器或执行时继续等待，不因运行时间长而重新触发；一轮等满 30 分钟还没跑完就一分钟后接着等，不算出错，跑一两个小时的检查也不会被退回。其他情况仍最多等待 30 分钟，暂时的 GitHub 或执行错误按原有规则重试。手动触发的 `workflow_dispatch` 检查不作为合并依据。
 
 规则示例（把绝对路径、接单电脑和仓库改成自己的）：
 
@@ -204,7 +207,7 @@ gh api repos/owner/app/statuses/<完整提交编号> -f context=delivery-agent/<
 }
 ```
 
-轮询无需配置新的 Webhook 或密钥，事件编号由标签记录与 PR 提交组成，重复读取不会重新派发；也可以直接接现有 GitHub 来源。事项按 `owner/repo#编号` 分开，`parallel` 控制并发。打 `deliver` 进入流程；同时打 `deliver-review` 只审查，在等待检查期间加上也会阻止合并；`deliver-attended` 表示有人盯着，发现问题只写回执、不另发通知。审查发现问题后，同一个提交不再审第二次，修复后推新提交才重新审查。普通 issue 打 `ask-owner` 会变成一张问题卡片，回答后去掉标签；不替你在 GitHub 发评论。
+轮询无需配置新的 Webhook 或密钥，事件编号由标签记录与 PR 提交组成，重复读取不会重新派发；也可以直接接现有 GitHub 来源。事项按 `owner/repo#编号` 分开，`parallel` 控制并发。打 `deliver` 进入流程；同时打 `deliver-review` 只审查，在等待检查期间加上也会阻止合并；`deliver-attended` 表示有人盯着，发现问题只写回执、不另发通知。审查发现挡上线的问题后，同一个提交不再审第二次，修复后推新提交，下一轮只核对这几条；连续两轮仍有挡上线的，不再审第三轮，等你决定：放行就由 `trusted` 里的账号在提交上写 `delivery-owner/<PR 编号>` 成功状态（说明里写你的原话）后重交。普通 issue 打 `ask-owner` 会变成一张问题卡片，回答后去掉标签；不替你在 GitHub 发评论。
 
 合并后发布失败时，修复发布后重新跟进原 PR 的 Ship 和健康检查。
 
@@ -247,11 +250,13 @@ MCP 服务不区分调用方，都按本人记录（`answer` 记成本人，`emi
 
 电脑不用开放任何端口，它们自己连过去。
 
-服务器上自己写的系统级 systemd unit，名字要和 `agent-autoloop service install` 用的一样（默认 `agent-autoloop`），`doctor` 才认得出。`agent-autoloop update` 不碰它，更新后自己运行 `systemctl restart` 才会用上新版。
+服务器上自己写的系统级 systemd unit，名字要和 `agent-autoloop service install` 用的一样（默认 `agent-autoloop`），`doctor` 才认得出。`agent-autoloop update`、再跑一遍安装命令和 `service install` 都不碰它，只提示你自己运行 `systemctl restart`，运行后才会用上新版。
 
 ## 日志与恢复
 
 Windows 用任务计划程序在本人登录后启动；通过 SSH 管理时仍用这个登录任务运行 Codex，避免它在 OpenSSH 会话中的沙箱启动限制（见 `INSTALL.md`）；`service install`、`service remove`、`update` 同样适用，更新会重启中台。Windows 自带的 Administrator 账号用「启动」文件夹代替登录任务，`service install` 会打印做法。安装见 `INSTALL.md`。
+
+Agent 不要在轮次里直接运行 `up` 重启派它来的这个中台：轮次结束或被停掉时，中台会跟着一起结束，`up` 会拒绝并说明原因。要用上新代码：装了登录服务的运行 `agent-autoloop service install`；Windows 用「启动」文件夹的，结束数据目录（默认 `%USERPROFILE%\.agent-autoloop`）里 `up.pid` 记着的进程，wscript 十秒后会用新代码再拉起；都没有的，请用户在自己的登录会话里启动。用临时数据目录起的测试中台不受这条限制。
 
 日志：Windows 在 `%USERPROFILE%\.agent-autoloop\logs\up.log`，macOS 在 `~/.agent-autoloop/logs/up.log`，Linux 运行 `journalctl --user -u agent-autoloop`。
 

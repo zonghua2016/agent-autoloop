@@ -57,7 +57,7 @@ function optionOf(card) {
   try{return JSON.parse(card.options??'[]')[card.choice]??'';}catch{return '';}
 }
 const changed = (row,before,field) => row[field]!=null&&row[field]!==before?.[field];
-const labels = {done:'本轮完成',nothing:'检查结束，无须处理',cancelled:'本轮停止'};
+const labels = {done:'本轮完成',nothing:'检查结束，无须处理',cancelled:'本轮已结束'};
 export function projectTimeline(id,facts) {
   const events=new Set(), emitted=new Set(), rows=[], ownCards=new Map(), previous=new Map(), agents=new Map(), started=new Set();
   for(const fact of facts) {
@@ -93,7 +93,7 @@ export function projectTimeline(id,facts) {
         }
         if(changed(row,before,'link'))add(fact.at,'会话链接',row.link);
         if(changed(row,before,'usage'))add(fact.at,'本轮用量',typeof row.usage==='string'?row.usage:JSON.stringify(row.usage));
-        if(changed(row,before,'finished_at'))add(row.finished_at,labels[row.state]??'收到回执',row.summary||row.error||'');
+        if(changed(row,before,'finished_at'))add(row.finished_at,labels[row.state]??'收到回执',[row.summary,row.error].filter(Boolean).join('\n'));
       }
       if(table==='cards'&&(row.run_id===id||events.has(row.answer_event))) {
         if(row.run_id===id)ownCards.set(row.id,row.state);

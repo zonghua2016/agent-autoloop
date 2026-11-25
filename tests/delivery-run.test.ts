@@ -5,7 +5,9 @@
 // an obsolete Ship run requires a remote compare that fails, hiding the successful release of this merge; a manual retry
 // reuses its scratch folder and fails because the origin already exists; closing a labelled PR leaves its status pending;
 // a restarted check that still has no jobs is counted as an execution error instead of returned with its cause and notice;
-// syncing main before a restart saves that restart under the old head, so the next round restarts the same check again.
+// syncing main before a restart saves that restart under the old head, so the next round restarts the same check again;
+// an owner's decision written by anyone lets a commit with findings through; a suggestion returns the change; a full check
+// that is still running when the round's half hour is up uses up one of the five tries, so a slow check is returned.
 // Nothing here reaches GitHub: `gh` is a stand-in first on PATH, and the Git remote is a local folder.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -398,6 +400,47 @@ test("an execution error says its cause in the round's result", async (t) => {
   assert.equal(JSON.parse(retry.about).execution, 1);
 });
 
+test("a full check still running past the round's half hour comes back in a minute without using up a try", async (t) => {
+  const started = Date.parse("2026-11-12T00:00:00Z");
+  for (const handedOff of [false, true]) {
+    startOver();
+    reviewFinds([]);
+    answers({
+      ...delivering(openPr),
+      [`repos/example/app/actions/workflows/check.yml/runs?head_sha=${code}&event=pull_request&per_page=100`]: {
+        workflow_runs: [
+          { id: 13, head_sha: code, event: "pull_request", status: "in_progress", created_at: "2026-11-12T00:00:00Z" },
+        ],
+      },
+      "repos/example/app/actions/runs/13/jobs?filter=latest&per_page=100": {
+        jobs: [{ name: "check", status: "in_progress", conclusion: null }],
+      },
+    });
+    let clockReads = 0;
+    // The round's own clock starts at the first read; every later read is past its half hour, so nothing sleeps.
+    t.mock.method(Date, "now", () => started + (clockReads++ === 0 ? 0 : 31 * 60_000));
+    const phases: { phase: string; detail?: string }[] = [];
+    const timers = [{ key: "delivery-retry", about: JSON.stringify({ head: code, github: 2, execution: 4 }) }];
+    const options = {
+      ...(handedOff ? { notifyCommand: join(root, "must-not-notify") } : {}),
+      report: (phase: string, _head: string, metadata?: { detail?: string }) => {
+        phases.push({ phase, detail: metadata?.detail });
+      },
+    };
+    const message = readMessage(await run("example/app", { ...about(8), timers }, true, options as any));
+    t.mock.restoreAll();
+    assert.match(String(message.summary), /完整检查还在跑/);
+    const [retry] = (message.receipt as any).later;
+    assert.equal(retry.at, new Date(started + 32 * 60_000).toISOString());
+    // Handed off, the round carries the tries it had; under the hub's own retries it isn't a failed round at all.
+    if (handedOff) {
+      assert.deepEqual(JSON.parse(retry.about), { head: code, github: 2, execution: 4 });
+      assert.deepEqual(phases.at(-1), { phase: "retrying", detail: "checks" });
+    }
+    assert.notEqual(lastStatus("delivery")?.state, "failure");
+  }
+});
+
 test("a check still stalled after a saved restart returns with its exact cause and notice, without an error retry", async (t) => {
   startOver();
   reviewFinds([]);
@@ -462,7 +505,7 @@ appendFileSync(${JSON.stringify(notices)}, input + "\\n");
   assert.match(called, /pr edit 8 --repo example\/app --remove-label deliver,deliver-review/);
   assert.doesNotMatch(called, /pr ready/);
 });
-const dataLoss = [{ title: "数据会丢", text: "先修复" }];
+const dataLoss = [{ level: "挡上线", title: "数据会丢", how: "每次保存都会", text: "先修复" }];
 
 test("a failed round in between does not open a commit with findings to another review", async () => {
   startOver();
@@ -482,6 +525,37 @@ test("a failed round in between does not open a commit with findings to another 
   assert.equal(timesReviewed(), 1);
   assert.equal(lastStatus("my-review").state, "failure");
   assert.match(third, /第 1 条还没有处理/);
+  // An owner's decision on the commit sends it back to the review, which checks who wrote it; one round of findings
+  // isn't the owner's to decide, so it still waits for a fix.
+  writeFileSync(
+    statuses,
+    readFileSync(statuses, "utf8") +
+      JSON.stringify({
+        sha: code,
+        creator: { id: 7 },
+        context: "delivery-owner/8",
+        state: "success",
+        description: "放行",
+      }) +
+      "\n",
+  );
+  const written = JSON.parse(readFileSync(bodies, "utf8"));
+  const key = "repos/example/app/pulls/8";
+  writeFileSync(bodies, JSON.stringify({ ...written, [key]: written[key].replace("处理：", "处理：不改") }));
+  answers(delivering(openPr));
+  const fourth = await run("example/app", about(8), true).catch((error) => error.message);
+  assert.equal(timesReviewed(), 1);
+  assert.match(fourth, /修复/);
+});
+test("a suggestion alone is recorded and doesn't hold the change back", async () => {
+  startOver();
+  reviewFinds([{ level: "建议", title: "可以更好", how: "两个人同一秒改同一行时", text: "后写的盖掉先写的" }]);
+  answers(delivering(openPr));
+  const result = await run("example/app", about(8), true).catch((error) => error.message);
+  assert.equal(timesReviewed(), 1);
+  assert.doesNotMatch(String(result), /审查发现问题/);
+  assert.match(JSON.parse(readFileSync(bodies, "utf8"))["repos/example/app/pulls/8"], /可以更好/);
+  assert.notEqual(lastStatus("my-review")?.state, "failure");
 });
 
 const merged = { ...openPr, state: "closed", merged_at: "now", merge_commit_sha: code };

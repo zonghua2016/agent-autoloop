@@ -2,18 +2,18 @@
 // job. An agent runs detached, in its own process group, writing to files, so the worker can stop and come back and
 // find it still going, or finished. A job is saved before anything slow happens; a result is saved before it's handed
 // in and stays until the hub has taken it.
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   closeSync,
   existsSync,
   mkdirSync,
   openSync,
+  promises as fs,
   readdirSync,
   readFileSync,
   readSync,
   renameSync,
-  rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -24,9 +24,9 @@ import { HubError, type Hub } from "../protocol/client.ts";
 import { HOME } from "../host/home.ts";
 import { commandLine, processCommand } from "../host/command.ts";
 import type { Job } from "../protocol/job.ts";
-import { addUsage, type Notice, type Result } from "../protocol/validate.ts";
+import { addUsage, dateTime, type Notice, type Result } from "../protocol/validate.ts";
 import { adapterFor, type Adapter, type Reading, type Turn, type Usage } from "./agents.ts";
-import { promptFor, readMessage, repairPrompt, resultFrom } from "./contract.ts";
+import { fit, promptFor, readMessage, repairPrompt, resultFrom } from "./contract.ts";
 import { loadUsage, saveUsage, usageDelta } from "./usage.ts";
 
 const RUNS = path.join(HOME, "worker", "runs");
@@ -82,11 +82,8 @@ export type WorkerOptions = {
   now?: () => number;
 };
 
-function save(entry: Entry) {
-  const file = path.join(entry.dir, "entry.json");
-  writeFileSync(`${file}.tmp`, JSON.stringify(entry), { mode: 0o600 });
-  renameSync(`${file}.tmp`, file);
-}
+const entryFile = (dir: string) => path.join(dir, "entry.json");
+const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT";
 
 /** How far a launch took its session's total. One that didn't go on in that session started it from nothing. */
 function sessionRise(entry: Entry, { session, sessionUsage }: Reading) {
@@ -134,9 +131,10 @@ async function alive(entry: Entry): Promise<boolean | null> {
   }
 }
 
-function signal(entry: Entry, name: NodeJS.Signals) {
+function signal(entry: Entry, name: NodeJS.Signals, child?: ChildProcess) {
   try {
-    if (entry.pid) process.kill(process.platform === "win32" ? entry.pid : -entry.pid, name);
+    if (child) child.kill(name);
+    else if (entry.pid) process.kill(process.platform === "win32" ? entry.pid : -entry.pid, name);
   } catch {}
 }
 
@@ -196,6 +194,15 @@ export function createWorker({
   let tries = 0;
   let blind = false;
   let tidied = -Infinity;
+  let restored = false;
+  let cleaning: Promise<void> | undefined;
+  const active = new Map<string, Entry>();
+  const supervisors = new Map<string, ChildProcess>();
+  const supervisor = (entry: Entry) => {
+    const child = supervisors.get(entry.dir);
+    return child?.pid === entry.pid ? child : undefined;
+  };
+  const unreadable = new Set<string>();
   const said = new Set<string>();
   /** Trouble that lasts comes round every second, and once in the log will do. */
   const sayOnce = (line: string) => {
@@ -204,17 +211,52 @@ export function createWorker({
   };
   mkdirSync(RUNS, { recursive: true, mode: 0o700 });
 
-  const entries = () =>
-    readdirSync(RUNS).flatMap((id) => {
-      try {
-        return [JSON.parse(readFileSync(path.join(RUNS, id, "entry.json"), "utf8")) as Entry];
-      } catch {
-        return [];
+  // Whoever holds the worker may ask before its first round, and sees the runs in hand then too.
+  const entries = () => {
+    if (!restored) restore();
+    return Array.from(active.values(), (entry) => ({ ...entry }));
+  };
+  const folders = async () =>
+    (await fs.readdir(RUNS, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(RUNS, entry.name));
+
+  function save(entry: Entry) {
+    const file = entryFile(entry.dir);
+    writeFileSync(`${file}.tmp`, JSON.stringify(entry), { mode: 0o600 });
+    renameSync(`${file}.tmp`, file);
+    // Keep the last persisted state even if a later update cannot be written.
+    active.set(entry.dir, { ...entry });
+  }
+
+  function recoverEntry(dir: string) {
+    try {
+      const entry = JSON.parse(readFileSync(entryFile(dir), "utf8")) as Entry;
+      if (!entry || !Number.isSafeInteger(entry.run)) throw new Error("invalid run entry");
+      active.set(dir, { ...entry, dir });
+      unreadable.delete(dir);
+    } catch (error) {
+      if (missing(error)) unreadable.delete(dir);
+      else {
+        unreadable.add(dir);
+        sayOnce(`couldn't recover ${dir}: ${error}`);
       }
-    });
+    }
+  }
+
+  /** Reads the folders once, when the worker starts or after the folder went wrong, not every round. */
+  function restore() {
+    active.clear();
+    unreadable.clear();
+    for (const entry of readdirSync(RUNS, { withFileTypes: true })) {
+      if (entry.isDirectory()) recoverEntry(path.join(RUNS, entry.name));
+    }
+    restored = true;
+  }
 
   /** Starts a turn of the agent: a process that outlives this one, leaving its output and exit code in files. */
   function launch(entry: Entry, adapter: Adapter, prompt: string) {
+    supervisors.delete(entry.dir);
     entry.turn += 1;
     entry.launchedAt = now();
     entry.usageBaseline = entry.resume ? loadUsage(entry.job.agent.use, entry.resume) : undefined;
@@ -267,6 +309,7 @@ export function createWorker({
         child.on("error", (error) => log(`run ${entry.run}: ${error}`));
         child.unref();
         entry.pid = child.pid;
+        if (child.pid !== undefined) supervisors.set(entry.dir, child);
       } finally {
         closeSync(output);
         closeSync(errors);
@@ -342,7 +385,7 @@ export function createWorker({
       save(entry);
       launch(entry, adapter, entry.prompt);
     } catch (error) {
-      endWith(entry, { outcome: "failed", error: String((error as Error).message ?? error).slice(0, 500) });
+      endWith(entry, { outcome: "failed", error: fit(String((error as Error).message ?? error), 500) });
     }
   }
 
@@ -389,7 +432,7 @@ export function createWorker({
   }
 
   /** A turn has ended. What it said is a result, or a reason to ask it again without redoing anything. */
-  function conclude(entry: Entry, adapter: Adapter, code: number | null) {
+  function conclude(entry: Entry, adapter: Adapter, code: number | null, unseen = false) {
     // One ended because its turn was over but it wouldn't exit said what it had to say first.
     const seen = read(entry, adapter, entry.finishedAt ? 0 : code);
     entry.usage = addUsage(addUsage(entry.usage, seen.usage), sessionRise(entry, seen));
@@ -400,7 +443,10 @@ export function createWorker({
     if (entry.why === "cancel") return endWith(entry, { outcome: "cancelled", summary: "已停止", ...known, ...usage });
     if (entry.why === "timeout") {
       const minutes = entry.job.agent.timeout ?? TIMEOUT_MINUTES;
-      const error = `超过 ${minutes} 分钟还没结束，已停止`;
+      // Past the grace period with a group that could be neither looked at nor signalled, nothing watched this run stop:
+      // 已停止 there is a claim about a fact nobody observed, and it is the line the owner reads on the third failure.
+      const stopped = unseen ? "停止信号发出后没能确认进程组已结束，进程可能还在" : "已停止";
+      const error = `超过 ${minutes} 分钟还没结束，${stopped}`;
       if (entry.repairs) return discardReceipt(entry, adapter, error);
       return endWith(entry, { outcome: "failed", error, ...known, ...usage });
     }
@@ -409,7 +455,8 @@ export function createWorker({
       if (entry.repairs) return discardReceipt(entry, adapter, error);
       // The conversation may not be there to go on in, or something else has it open: this go carries on in a new one.
       // Not once the turn has started: a new one would do its work again. The hub tries again later, in this one.
-      if (entry.resume && !entry.triedFresh && entry.repairs === 0 && !seen.started) {
+      // Out of quota, a new one would fail the same way.
+      if (entry.resume && !entry.triedFresh && entry.repairs === 0 && !seen.started && !seen.limitedUntil) {
         log(`run ${entry.run}: couldn't go on in ${entry.resume} (${error}); starting a new session`);
         entry.triedFresh = true;
         entry.resume = null;
@@ -418,10 +465,12 @@ export function createWorker({
           launch(entry, adapter, entry.prompt);
           return;
         } catch (failure) {
-          return endWith(entry, { outcome: "failed", error: String(failure).slice(0, 500) });
+          return endWith(entry, { outcome: "failed", error: fit(String(failure), 500) });
         }
       }
-      return endWith(entry, { outcome: "failed", error: error.slice(0, 500), ...known, ...usage });
+      // The hub refuses a whole result with a time it can't read, and the run would wait for a result that never comes.
+      const limited = dateTime(seen.limitedUntil) && { limitedUntil: seen.limitedUntil };
+      return endWith(entry, { outcome: "failed", error: fit(error, 500), ...limited, ...known, ...usage });
     }
     const { result, problem } = resultFrom(readMessage(seen.text), { session, usage: entry.usage });
     if (entry.repairs && !problem && result.outcome === "failed") return discardReceipt(entry, adapter, result.error!);
@@ -448,7 +497,7 @@ export function createWorker({
     try {
       adapter = await adapterFor(entry.job.agent.use);
     } catch (error) {
-      return endWith(entry, { outcome: "failed", error: String((error as Error).message).slice(0, 500) });
+      return endWith(entry, { outcome: "failed", error: fit(String((error as Error).message), 500) });
     }
     if (entry.turn === 0) {
       // The worker stopped while starting it, before anything was launched.
@@ -459,24 +508,25 @@ export function createWorker({
         });
         return launch(entry, adapter, entry.prompt);
       } catch (error) {
-        return endWith(entry, { outcome: "failed", error: String((error as Error).message ?? error).slice(0, 500) });
+        return endWith(entry, { outcome: "failed", error: fit(String((error as Error).message ?? error), 500) });
       }
     }
     const { exit } = files(entry);
     const exitCode = () => (existsSync(exit) ? Number(readFileSync(exit, "utf8").trim()) : null);
+    const child = supervisor(entry);
     if (entry.stopping !== undefined) {
       const going = await groupAlive(entry);
       const overdue = now() - entry.stopping > STOP_GRACE;
       if (going === true) {
-        if (overdue) signal(entry, "SIGKILL");
+        if (overdue) signal(entry, "SIGKILL", child);
         return;
       }
       if (going === null) {
         // The forced kill is the last thing that can be done to it, and whether it worked can't be seen.
         if (!overdue) return;
-        signal(entry, "SIGKILL");
+        if (process.platform !== "win32" || child) signal(entry, "SIGKILL", child);
         // A turn that was over, or a timeout, ends on what it said: `failed` there is tried again, redoing work done.
-        if (entry.why !== "cancel") return conclude(entry, adapter, exitCode());
+        if (entry.why !== "cancel") return conclude(entry, adapter, exitCode(), true);
         // Reporting `cancelled` would release the item while a process may still be in it, which the protocol forbids
         // (docs/protocol.md: 确认组内没有活进程后才交 cancelled). A cancelled run's `failed` isn't tried again.
         return endWith(entry, {
@@ -488,7 +538,8 @@ export function createWorker({
     }
     if (existsSync(exit)) return conclude(entry, adapter, exitCode());
     // The shell can publish its exit between the first file check and ps returning.
-    const looking = await alive(entry);
+    // A Windows supervisor started here already has a process handle and an exit watcher.
+    const looking = child ? child.exitCode === null && child.signalCode === null : await alive(entry);
     if (looking === false) return conclude(entry, adapter, exitCode());
     // Unable to look, the run counts as still going, so its timeout and its finished turn still end it.
     if (looking === null && !blind) log(`couldn't inspect processes; runs count as going until they end or time out`);
@@ -518,17 +569,18 @@ export function createWorker({
         entry.finishedAt = moment;
         save(entry);
       } else if (moment - entry.finishedAt > GRACE) {
-        stop(entry, "finished");
+        await stop(entry, "finished");
       }
     }
   }
 
-  function stop(entry: Entry, why: NonNullable<Entry["why"]>) {
+  async function stop(entry: Entry, why: NonNullable<Entry["why"]>) {
     if (entry.stopping !== undefined || entry.result) return;
     entry.stopping = now();
     entry.why = why;
     save(entry);
-    signal(entry, "SIGTERM");
+    const child = supervisor(entry);
+    if (child || process.platform !== "win32" || (await alive(entry)) === true) signal(entry, "SIGTERM", child);
     log(`run ${entry.run}: stopping (${why})`);
   }
 
@@ -545,7 +597,13 @@ export function createWorker({
       }
       log(`run ${entry.run}: the hub refused its result (${error.status}: ${error.message}); dropped`);
     }
-    unlinkSync(path.join(entry.dir, "entry.json"));
+    try {
+      unlinkSync(entryFile(entry.dir));
+    } catch (error) {
+      if (!missing(error)) throw error;
+    }
+    active.delete(entry.dir);
+    supervisors.delete(entry.dir);
   }
 
   /** Nothing else can tell the owner when the hub is what's gone. */
@@ -583,11 +641,17 @@ export function createWorker({
 
   /** One round: look at what's in hand, hand in what's ended, come for more. Whether the hub could be reached. */
   async function tick() {
-    // Here and not in run: whatever drives the worker comes through here.
-    if (now() - tidied >= TIDY_EVERY) {
-      tidied = now();
-      tidy(tidied);
-    }
+    if (restored) {
+      try {
+        if (!statSync(RUNS).isDirectory()) throw new Error(`Not a directory: ${RUNS}`);
+      } catch (error) {
+        restored = false;
+        throw error;
+      }
+      for (const dir of unreadable) recoverEntry(dir);
+    } else restore();
+    const moment = now();
+    if (moment - tidied >= TIDY_EVERY) void tidy(moment);
     await eachEntry(check);
     await eachEntry(settle);
     const held = entries();
@@ -601,7 +665,7 @@ export function createWorker({
       });
       for (const id of answer?.cancel ?? []) {
         const entry = held.find((entry) => entry.run === id);
-        if (entry) stop(entry, "cancel");
+        if (entry) await stop(entry, "cancel");
       }
       if (answer?.job) {
         claim = randomUUID();
@@ -617,15 +681,30 @@ export function createWorker({
 
   /** Output of finished runs is kept a while for looking into, then goes. */
   function tidy(moment = now()) {
-    for (const id of readdirSync(RUNS)) {
-      const dir = path.join(RUNS, id);
-      try {
-        const expired = moment - statSync(dir).mtimeMs > KEEP_DAYS * 24 * 3600_000;
-        if (!existsSync(path.join(dir, "entry.json")) && expired) rmSync(dir, { recursive: true, force: true });
-      } catch (error) {
-        sayOnce(`couldn't clear ${dir}: ${error}`);
+    if (cleaning) return cleaning;
+    tidied = moment;
+    cleaning = (async () => {
+      for (const dir of await folders()) {
+        try {
+          if (active.has(dir) || moment - (await fs.stat(dir)).mtimeMs <= KEEP_DAYS * 24 * 3600_000) continue;
+          try {
+            await fs.access(entryFile(dir));
+            continue;
+          } catch (error) {
+            if (!missing(error)) throw error;
+          }
+          if (active.has(dir)) continue;
+          await fs.rm(dir, { recursive: true, force: true });
+        } catch (error) {
+          if (!missing(error)) sayOnce(`couldn't clear ${dir}: ${error}`);
+        }
       }
-    }
+    })()
+      .catch((error) => sayOnce(`couldn't list old runs: ${error}`))
+      .finally(() => {
+        cleaning = undefined;
+      });
+    return cleaning;
   }
 
   async function run(signalled: AbortSignal) {

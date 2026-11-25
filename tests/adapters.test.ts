@@ -1,6 +1,7 @@
 // What's different about each agent. Failure cases: a level of access maps to the wrong flag, full access is given unasked,
-// a retry starts a new conversation instead of going on, an error or a turn that never finished counts as an answer, a
-// reconnect Codex announced and got over before its turn finished fails the finished run, a program's warning is taken
+// a retry starts a new conversation instead of going on, an error or a turn that never finished counts as an answer, the
+// reason a run failed starts half way through a character when the CLI printed more than 300 units, a reconnect Codex
+// announced and got over before its turn finished fails the finished run, a program's warning is taken
 // for its answer, a finished Claude run printed as one JSON array is read as a failure, the
 // session isn't picked out, a command line's placeholder isn't filled in, or a background Codex run assumes it inherited
 // an application's browser connection. A turn that got going and then broke, or was killed before it finished, doesn't
@@ -16,9 +17,14 @@
 // something other than what the event said. A built-in agent starts the program it finds, not the one its rules name,
 // so a wrapper that sends Claude Code to another service is never run. A service tier the rules name for Codex never
 // reaches its command line, so the run takes whatever tier the machine's own Codex config has that day. A program
-// missing for a moment, as while an update reinstalls it, stays missing until the worker restarts.
+// missing for a moment, as while an update reinstalls it, stays missing until the worker restarts, and keeps handing out
+// a path it found after an update deleted that program. The Codex the desktop app installs is missed once an update
+// leaves PATH naming the folder it deleted, and a lookup that runs while that update empties the folder throws the
+// lookup out instead of skipping the folder. A program a terminal finds only because ~/.zshrc or ~/.bashrc puts its
+// folder on PATH is missing for a worker launchd or systemd started.
+// Claude at its usage limit doesn't say when it resets, so the hub keeps handing it rounds that fail within seconds.
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setup } from "./helpers.ts";
@@ -28,8 +34,12 @@ process.env.PATH = `/nonexistent:${process.env.PATH}`;
 const { findProgram } = await import("../worker/agents.ts");
 // Command construction must also run on CI machines without Codex installed.
 const shell = process.env.SHELL;
-const lookup = join(setup("adapters"), "lookup.sh");
-writeFileSync(lookup, '#!/bin/sh\nprintf "%s\\n" /test/codex\n', { mode: 0o755 });
+const primed = setup("adapters");
+const lookup = join(primed, "lookup.sh");
+// A program a path names has to be there: the worker looks a cached one up again once the file it named is gone.
+const installed = join(primed, "codex");
+writeFileSync(installed, "", { mode: 0o755 });
+writeFileSync(lookup, `#!/bin/sh\nprintf "%s\\n" '${installed}'\n`, { mode: 0o755 });
 process.env.SHELL = lookup;
 findProgram("codex");
 if (shell === undefined) delete process.env.SHELL;
@@ -37,6 +47,7 @@ else process.env.SHELL = shell;
 type Adapter = import("../worker/agents.ts").Adapter;
 const claude: Adapter = (await import("../plugins/claude/agent.ts")).default;
 const codex: Adapter = (await import("../plugins/codex/agent.ts")).default;
+const { inTheApp } = await import("../plugins/codex/agent.ts");
 const command: Adapter = (await import("../plugins/command/agent.ts")).default;
 const dsh: Adapter = (await import("../plugins/dsh/agent.ts")).default;
 const zcode: Adapter = (await import("../plugins/zcode/agent.ts")).default;
@@ -175,6 +186,23 @@ test("Claude Code: a resume that never got going doesn't say it started, and say
   assert.equal(claude.read("", 1, "No conversation found").started, undefined, "printed as json: nothing on stdout");
   assert.equal(claude.read(stream(hook), 1, "boom").started, undefined, "a hook runs before it has the prompt");
   assert.deepEqual(claude.read(stream(hook), null, ""), { session: "s" });
+});
+
+test("Claude Code: at its usage limit it says when that resets", () => {
+  // Cut down from a real 2.1.318 run on 2026-11-06.
+  const limit = {
+    type: "rate_limit_event",
+    rate_limit_info: { status: "rejected", resetsAt: 1793944200, rateLimitType: "five_hour" },
+    session_id: "s",
+  };
+  const words = "You've hit your 5-hour limit · resets 1:50pm (Asia/Shanghai)";
+  const refused = { ...said(words), is_error: true, api_error: "usage_limit_reached", api_error_status: 429 };
+  const reading = claude.read(stream(init, limit, refused), 1, "");
+  assert.deepEqual([reading.error, reading.limitedUntil], [words, "2026-11-06T05:50:00.000Z"]);
+  const unsaid = Date.parse(claude.read(stream(init, refused), 1, "").limitedUntil!) - Date.now();
+  assert.ok(unsaid > 59 * 60_000 && unsaid <= 60 * 60_000, "no time given: an hour");
+  const other = claude.read(stream(init, { ...said("API Error: 500"), is_error: true }), 1, "");
+  assert.equal(other.limitedUntil, undefined, "any other error is retried as before");
 });
 
 test("Claude Code: the raw messages of a broken run aren't the reason it failed", () => {
@@ -368,6 +396,11 @@ test("a plain command: placeholders filled in, stdout is its last message, a bad
   assert.deepEqual(command.read("好了\n", 0, ""), { text: "好了\n" });
   assert.deepEqual(command.read("中途", null, ""), {});
   assert.match(command.read("", 3, "boom").error!, /退出码 3：boom/);
+  // Its output is kept from the end, so the window can begin half way through a character; a lone half can't be stored or
+  // printed, and the hub holds this string in `runs.error` for `status` to read.
+  const half = command.read("", 3, `😀${"x".repeat(299)}`).error!;
+  assert.ok(half.isWellFormed(), half);
+  assert.equal(half, `退出码 3：${"x".repeat(299)}`);
   assert.equal(command.link, undefined, "it has no session to go on in");
 });
 
@@ -392,6 +425,29 @@ test("a program that isn't there says so", () => {
   assert.throws(() => findProgram("surely-not-installed-anywhere"), /找不到 surely-not-installed-anywhere/);
 });
 
+test("a program on the PATH a terminal's shell sets up is found", { skip: process.platform === "win32" }, () => {
+  const folder = setup("adapters-terminal");
+  const program = join(folder, "terminal-agent");
+  writeFileSync(program, "", { mode: 0o755 });
+  // Like zsh: a login shell that isn't interactive skips ~/.zshrc, and an interactive one may print before the PATH.
+  const terminal = join(folder, "shell.sh");
+  writeFileSync(
+    terminal,
+    `#!/bin/sh\n[ "$1 $2" = "+m -ic" ] || exit 1\nprintf '%s\\n' 'Welcome back' "/nonexistent:${folder}"\n`,
+    {
+      mode: 0o755,
+    },
+  );
+  const shell = process.env.SHELL;
+  process.env.SHELL = terminal;
+  try {
+    assert.equal(findProgram("terminal-agent"), program);
+  } finally {
+    if (shell === undefined) delete process.env.SHELL;
+    else process.env.SHELL = shell;
+  }
+});
+
 test("a program missing at one lookup is found at the next once it's back", () => {
   const program = join(setup("adapters-reinstall"), "reinstalled-agent");
   assert.throws(() => findProgram("reinstalled-agent", () => [program]), /找不到 reinstalled-agent/);
@@ -399,6 +455,54 @@ test("a program missing at one lookup is found at the next once it's back", () =
   assert.equal(
     findProgram("reinstalled-agent", () => [program]),
     program,
+  );
+});
+
+test("a program the app moved is found where it keeps it now, newest first", () => {
+  const local = setup("adapters-codex-app");
+  const root = join(local, "OpenAI", "Codex", "bin");
+  const yesterday = join(root, "5b4923dff14fbe66");
+  const today = join(root, "89cd6612adc9c8d8");
+  const helpersOnly = join(root, "6b3391ee968b4b80");
+  for (const folder of [yesterday, today, helpersOnly]) mkdirSync(folder, { recursive: true });
+  writeFileSync(join(yesterday, "codex.exe"), "");
+  writeFileSync(join(today, "codex.exe"), "");
+  // The app keeps its other programs in these folders too, and a folder without codex.exe isn't where codex is: the
+  // same as one an update took codex.exe out of after the list was read, which is left out rather than thrown.
+  writeFileSync(join(helpersOnly, "rg.exe"), "");
+  utimesSync(join(yesterday, "codex.exe"), new Date("2026-11-21T00:12:00Z"), new Date("2026-11-21T00:12:00Z"));
+  utimesSync(join(today, "codex.exe"), new Date("2026-11-21T00:13:00Z"), new Date("2026-11-21T00:13:00Z"));
+  const usual = process.env.LOCALAPPDATA;
+  process.env.LOCALAPPDATA = local;
+  try {
+    assert.deepEqual(
+      inTheApp().slice(0, 2),
+      [join(today, "codex.exe"), join(yesterday, "codex.exe")],
+      "the newest folder the app kept a codex.exe in comes first",
+    );
+  } finally {
+    if (usual === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = usual;
+  }
+});
+
+test("a program moved while the worker runs is looked up again", () => {
+  const folder = setup("adapters-moved");
+  const before = join(folder, "5b4923dff14fbe66", "moved-agent");
+  mkdirSync(join(folder, "5b4923dff14fbe66"), { recursive: true });
+  writeFileSync(before, "", { mode: 0o755 });
+  assert.equal(
+    findProgram("moved-agent", () => [before]),
+    before,
+  );
+  const after = join(folder, "89cd6612adc9c8d8", "moved-agent");
+  mkdirSync(join(folder, "89cd6612adc9c8d8"), { recursive: true });
+  writeFileSync(after, "", { mode: 0o755 });
+  unlinkSync(before);
+  assert.equal(
+    findProgram("moved-agent", () => [before, after]),
+    after,
+    "a cached path that's gone isn't an answer",
   );
 });
 

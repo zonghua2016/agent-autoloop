@@ -1215,18 +1215,18 @@ export function createInbox(config: TaskConfig, store: TaskStore, ports: Ports) 
           if (!["done", "nothing", "cancelled"].includes(run.state)) continue;
           task.report = {
             key: `ft-result-${task.id}`,
-            text: `任务 ${task.id} 本轮${run.state === "cancelled" ? "已停止" : "已结束"}：\n${run.summary || run.error || "请查看中台记录"}`,
+            text: `任务 ${task.id} 本轮已结束：\n${[run.summary, run.error].filter(Boolean).join("\n") || "请查看中台记录"}`,
             sent: false,
           };
           if (task.plan?.kind === "verify")
             task.delivery = {
               title:
                 run.state === "cancelled"
-                  ? "验收已停止"
+                  ? "验收已结束"
                   : run.summary?.startsWith("验收通过")
                     ? "验收通过"
                     : "验收未通过",
-              text: run.summary || run.error || "请查看中台记录",
+              text: [run.summary, run.error].filter(Boolean).join("\n") || "请查看中台记录",
             };
           store.save(task);
         }

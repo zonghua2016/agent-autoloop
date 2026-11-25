@@ -6,7 +6,7 @@ const activeStates=new Set(['queued','claimed','unknown']);
 const editing=container=>!!container.querySelector('form[data-dirty=true],form[data-submitting=true]')||!!(container.contains(document.activeElement)&&document.activeElement.matches('input,textarea,select')&&!document.activeElement.closest('form[data-submitted=true]'));
 const clearResult=()=>q('management-result')?.remove();
 const filters={active:'进行中',asks:'待处理卡片',finished:'最近结束',unrouted:'未分派',feishu:'飞书事项',health:'规则与健康'};
-const stateLabels={done:'完成',nothing:'检查结束',cancelled:'已停止',claimed:'执行中',unknown:'状态待确认',queued:'等待接单'};
+const stateLabels={done:'完成',nothing:'检查结束',cancelled:'已结束',claimed:'执行中',unknown:'状态待确认',queued:'等待接单'};
 let snapshot=null, entries=[], selected=null, pinnedSelection=false, filter='active', stationFilter=null, stream=null, updating=false, pending=false, dirty=0;
 let loadingTimer, detailTimer, lastUpdate='正在连接中台', detailRequest=0, panelView='list', olderBefore=null, olderRuns=[];
 let workView=null,workError='',workRequest=false,workPending=false,selectedWork=null,workRendered=null,workListRendered=null;
@@ -47,7 +47,7 @@ function runEntry(run) {
   const future=run.notBefore&&Date.parse(run.notBefore)>Date.parse(snapshot.now);
   const retry=run.state==='queued'&&run.attempts>0;
   const subject=run.events.find(event=>event.subject)?.subject;
-  let label=stateLabels[run.state]??run.state, reason=run.summary||run.error||'中台未记录更多结论。';
+  let label=stateLabels[run.state]??run.state, reason=[run.summary,run.error].filter(Boolean).join(' · ')||'中台未记录更多结论。';
   if(run.state==='queued') {
     if(rule?.paused){label='规则暂停';reason=rule.paused.reason||'这条规则暂停中，恢复后才会领取。';}
     else if(retry){label=future?'等重试':'可重新领取';reason=[run.error,future?'下次可领取 '+time(run.notBefore):'已经到了重试时间，等待接单。'].filter(Boolean).join(' · ');}

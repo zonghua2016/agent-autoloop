@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { HOME } from "../../host/home.ts";
 import { commandLine } from "../../host/command.ts";
-import { codexCommand, parseReview } from "../delivery/review.ts";
+import { codexCommand } from "../delivery/review.ts";
 import { receiptBlock } from "../delivery/input.ts";
 import { Codeup } from "./api.ts";
 import { checkFlowCI } from "./flow-ci.ts";
@@ -81,6 +81,25 @@ export function execute(
     child.stdin?.end(input);
   });
 }
+// Codeup keeps its existing all-blocking contract; GitHub's review levels are a separate delivery policy.
+function parseReview(text: string): { title: string; text: string }[] {
+  const value = JSON.parse(text);
+  if (
+    !value ||
+    !Array.isArray(value.findings) ||
+    !value.findings.every(
+      (finding: any) =>
+        finding &&
+        typeof finding.title === "string" &&
+        finding.title.trim() &&
+        typeof finding.text === "string" &&
+        finding.text.trim(),
+    )
+  )
+    throw new Error("审查没有交回可读的 findings 列表");
+  return value.findings;
+}
+
 export async function review(p: Project, text: string, settings: Settings) {
   const folder = mkdtempSync(join(tmpdir(), "autoloop-codeup-review-"));
   try {

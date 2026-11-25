@@ -52,6 +52,16 @@ export class DeliveryRefusal extends Error {
 
 export class DeliverySuperseded extends Error {}
 
+/** GitHub has the full check and it is going: only GitHub's own time limits end it, so outlasting a round isn't a failure. */
+export class ChecksStillRunning extends Error {
+  readonly head: string;
+
+  constructor(head: string, waited: unknown) {
+    super(waited instanceof Error ? waited.message : String(waited), { cause: waited });
+    this.head = head;
+  }
+}
+
 const FINDINGS = "审查发现问题，修复后推新提交才会重审";
 const STALL = 10 * 60_000;
 const labels = (pr: any) => new Set<string>((pr.labels ?? []).map((label: any) => label.name));
@@ -205,8 +215,12 @@ export async function deliver(
   if (!pr.merged_at && !io.verifyReview) {
     // The label stays on after findings, so another event lands here: a second review that misses them would merge the commit.
     // The review status keeps the record, since a failed round writes its error over `delivery`.
+    // An owner's decision goes on to the review, which checks who wrote it.
     const { statuses } = await io.api(`commits/${head}/status?per_page=100`);
-    if (statuses.some((item: any) => item.context === config.review.status && item.state === "failure"))
+    const decided = statuses.some(
+      (item: any) => item.context === `delivery-owner/${number}` && item.state === "success",
+    );
+    if (!decided && statuses.some((item: any) => item.context === config.review.status && item.state === "failure"))
       return { summary: "这个提交审查发现过问题，修复后推新提交才会重审" };
   }
   if (!io.verifyReview) await accept();
@@ -387,7 +401,14 @@ export async function deliver(
             if (!auto || !pr.auto_merge) throw new Error("尚未确认合并，稍后继续核实");
           }
         }
-        await io.wait();
+        try {
+          await io.wait();
+        } catch (error) {
+          // A finished run waits too when its required job was skipped or isn't there; only one still going ends on its own.
+          const going = state === "waiting" ? await newestCheck(head, config, io) : undefined;
+          if (going && going.id > after && going.status !== "completed") throw new ChecksStillRunning(head, error);
+          throw error;
+        }
       }
     } catch (error) {
       await stopAuto();

@@ -4,9 +4,11 @@
 //   "channels": { "feishu": { "key": "…", "user": "ou_xxx" } } in config.json
 //   "channels": { "feishu": { "name": "飞书", "answerers": ["ou_xxx"] } } in rules.json: who may answer.
 import { execFile, spawn } from "node:child_process";
+import { setTimeout as wait } from "node:timers/promises";
 import type { Card, ChannelContext } from "../../host/channels.ts";
 import { eachLine } from "../../host/lines.ts";
 import { commandLine } from "../../host/command.ts";
+import { fit } from "../../worker/contract.ts";
 
 /** Feishu sends these values as JSON in a string, which may be empty. */
 function safeJson(text: unknown): any {
@@ -24,6 +26,35 @@ function outcomeOf(card: Card) {
   if (card.state === "done") return `你选了「${chosen}」。${card.result ? `已执行：${card.result}` : "已执行。"}`;
   if (card.state === "closed" && card.kind === "ask") return `不用决定了：${card.result ?? ""}`;
   return card.state === "closed" && card.result ? card.result : null;
+}
+
+/** What lark-cli said, on one line and short enough for a log, without cutting a character in half. */
+const oneLine = (text: unknown) =>
+  fit(
+    String(text ?? "")
+      .replace(/\s+/g, " ")
+      .trim(),
+    300,
+  );
+
+/**
+ * A failure as the reason and the next thing to do: the CLI's error body is JSON meant for a program, not the reader.
+ * The bot's permissions come from the app's settings in Feishu's developer console, and signing in again doesn't change
+ * them; only the user identity is fixed by lark-cli auth login.
+ */
+function explain(where: string, body: any, failure: Error | undefined, printed: string, identity?: string) {
+  const type = typeof body?.type === "string" ? body.type : "";
+  const said = typeof body?.message === "string" ? oneLine(body.message) : "";
+  const because = [type, said].filter(Boolean).join("：");
+  if (type === "authorization" || type === "authentication") {
+    const page = typeof body?.console_url === "string" ? `：${oneLine(body.console_url)}` : "";
+    const hint = typeof body?.hint === "string" ? oneLine(body.hint) : "";
+    return identity === "bot"
+      ? `${where} 没通过飞书授权（${because}）：在飞书开发者后台给这个应用开通所需权限${page}`
+      : `${where} 没通过飞书授权（${because}）：${hint || "在这台电脑运行 lark-cli auth login 重新登录"}`;
+  }
+  if (because) return `${where} 失败：飞书说 ${because}`;
+  return `${where} 失败：${(oneLine(printed) || oneLine(failure?.message)).replace(/^Error:\s*/, "") || "没有说明原因"}`;
 }
 
 /** One card, as it looks now: the options while it's open, what became of it after. */
@@ -107,19 +138,33 @@ export default async function feishu(
 ) {
   const program = (options.lark as string | undefined) ?? "lark-cli";
   const lark = async (args: string[], input?: string) => {
-    const printed = await new Promise<string>((resolve, reject) => {
+    const ran = await new Promise<{ failure?: Error; stdout: string; stderr: string }>((resolve) => {
       const child = execFile(
         ...commandLine([program, ...args]),
         { encoding: "utf8", timeout: 60_000, signal },
-        (error, stdout) => (error ? reject(error) : resolve(stdout)),
+        (failure, stdout, stderr) => resolve({ failure: failure ?? undefined, stdout, stderr }),
       );
-      child.stdin!.on("error", input === undefined ? () => {} : reject);
+      child.stdin!.on(
+        "error",
+        input === undefined ? () => {} : (failure) => resolve({ failure, stdout: "", stderr: "" }),
+      );
       child.stdin!.end(input);
     });
-    const out = JSON.parse(printed);
-    if (out.ok === false || out.error) {
-      throw new Error(`lark-cli ${args.slice(0, 3).join(" ")}: ${JSON.stringify(out.error ?? out).slice(0, 300)}`);
+    const where = `lark-cli ${args.slice(0, 3).join(" ")}`;
+    // What it did is on stdout; what went wrong is on stderr, and an error body can come with either exit code.
+    const printed = ran.failure ? ran.stderr : ran.stdout;
+    let out: any;
+    try {
+      out = JSON.parse(printed);
+    } catch {
+      out = null;
     }
+    const identity =
+      typeof out?.identity === "string" ? out.identity : args.includes("--as") ? args[args.indexOf("--as") + 1] : "";
+    if (out?.ok === false || out?.error)
+      throw new Error(explain(where, out.error ?? out, ran.failure, printed, identity));
+    if (ran.failure) throw new Error(explain(where, null, ran.failure, printed));
+    if (!out) throw new Error(`${where} 失败：返回的不是 JSON（${oneLine(printed) || "没有输出"}）`);
     return out;
   };
   const owner = (options.user as string | undefined) ?? (await lark(["auth", "status"], "")).identities?.user?.openId;
@@ -215,6 +260,9 @@ export default async function feishu(
   }
 
   async function listen() {
+    // Feishu can go on counting a connection that's gone (often the one from before a restart) for hours, and lark-cli
+    // refuses every listener until it lets go; `event status` and `event stop` only reach this computer's bus.
+    let refused = false;
     while (!signal.aborted) {
       // stdin stays open: lark-cli ends an unbounded consume when its stdin closes.
       const consume = spawn(...commandLine([program, "event", "consume", "card.action.trigger", "--as", "bot"]), {
@@ -224,14 +272,24 @@ export default async function feishu(
       consume.on("error", (error) => log(`the click listener couldn't run: ${error}`));
       const stop = () => consume.kill();
       signal.addEventListener("abort", stop);
-      eachLine(consume.stderr, log);
+      let conflict = false;
+      eachLine(consume.stderr, (line) => {
+        if (/another event bus is already connected/.test(line)) conflict = true;
+        log(line);
+      });
       eachLine(consume.stdout, (line) => void clicked(line).catch((error) => log(`click not handled: ${error}`)));
       await new Promise((resolve) => consume.on("close", resolve));
       signal.removeEventListener("abort", stop);
-      if (!signal.aborted) {
-        log("the click listener stopped; starting it again in 10 seconds");
-        await new Promise((resolve) => setTimeout(resolve, 10_000));
+      if (signal.aborted) break;
+      if (conflict && !refused) {
+        log(
+          "飞书那边还记着这个应用的另一条事件连接，拒绝再连：在它放开之前卡片点击收不到。" +
+            "常见于刚重启，旧连接可能要几个小时才放开；别的电脑也在跑这个应用的监听就先停掉它。1 分钟后再试，连上前不再重复这条。",
+        );
       }
+      refused = conflict;
+      if (!conflict) log("the click listener stopped; starting it again in 10 seconds");
+      await wait(conflict ? 60_000 : 10_000, undefined, { signal }).catch(() => {});
     }
   }
 

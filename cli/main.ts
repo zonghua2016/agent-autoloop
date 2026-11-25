@@ -7,13 +7,14 @@ import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { hubClient } from "../protocol/client.ts";
 import { parseRules } from "../protocol/rules.ts";
-import { CONFIG_FILE, readConfig, writeConfig, type Config } from "../host/config.ts";
+import { CONFIG_FILE, parseListen, readConfig, writeConfig, type Config } from "../host/config.ts";
 import { HOME, RULES_FILE } from "../host/home.ts";
 import { findOnPath, psQuote } from "../host/command.ts";
 import { privateDirectory } from "../host/files.ts";
 import {
   aboveDesktop,
   installService,
+  leftToSystem,
   removeService,
   restartService,
   runningUp,
@@ -177,6 +178,7 @@ rules.json 里这个定时任务要写 cwd；你答了，中台叫醒它的 Agen
 };
 
 type Flags = Record<string, string | true>;
+const BOOLEAN_FLAGS = new Set(["dry-run", "json", "no-service", "yes"]);
 
 function flags(args: string[]) {
   const named: Flags = {};
@@ -186,8 +188,14 @@ function flags(args: string[]) {
       rest.push(args[i]);
       continue;
     }
+    const eq = args[i].indexOf("=", 2);
+    if (eq !== -1) {
+      named[args[i].slice(2, eq)] = args[i].slice(eq + 1);
+      continue;
+    }
     const name = args[i].slice(2);
-    if (args[i + 1] !== undefined && !args[i + 1].startsWith("--")) named[name] = args[++i];
+    if (BOOLEAN_FLAGS.has(name)) named[name] = true;
+    else if (args[i + 1] !== undefined && !args[i + 1].startsWith("--")) named[name] = args[++i];
     else named[name] = true;
   }
   return { named, rest };
@@ -207,8 +215,11 @@ function refuseUnknownFlags(args: string[], { flags: known, usage }: { flags: st
     console.log(usage);
     process.exit(0);
   }
-  const unknown = Object.keys(flags(args).named).filter((name) => !known.includes(name));
+  const { named } = flags(args);
+  const unknown = Object.keys(named).filter((name) => !known.includes(name));
   if (unknown.length) fail(`不认识的参数：${unknown.map((name) => `--${name}`).join("、")}\n\n${usage}`);
+  const badBool = Object.entries(named).find(([name, value]) => BOOLEAN_FLAGS.has(name) && value !== true);
+  if (badBool) fail(`--${badBool[0]} 不接参数值\n\n${usage}`);
 }
 
 const client = (key: string, config = readConfig()) => hubClient(config.url, key);
@@ -291,7 +302,7 @@ function commandWords(line: string) {
 /** What was asked for on the command line, or whichever of the usual Agents is installed. */
 async function agentsToUse(named: Flags, worker: string) {
   const agents: Record<string, { name: string; worker: string; use: string; command?: string[] }> = {};
-  const { adapterFor, findProgram } = await import("../worker/agents.ts");
+  const { adapterFor, onPath } = await import("../worker/agents.ts");
   const command = text(named.command);
   if (command) {
     const words = commandWords(command);
@@ -300,14 +311,8 @@ async function agentsToUse(named: Flags, worker: string) {
     const [first] = words;
     const there = /[\\/]/.test(first)
       ? existsSync(path.resolve(first))
-      : /^[\w.+@-]+$/.test(first) &&
-        (() => {
-          try {
-            return Boolean(findProgram(first));
-          } catch {
-            return false;
-          }
-        })();
+      : // Where the rule will look, not where a built-in Agent may also look: a rule's command runs in a login shell.
+        /^[\w.+@-]+$/.test(first) && Boolean(onPath(first));
     if (!there) return fail(`找不到 ${first}：先装好它，或者在 --command 里写它的完整路径。`);
     agents.agent = { name: "Agent", worker, use: "command", command: words };
     return agents;
@@ -339,6 +344,14 @@ async function init(args: string[]) {
   // `init -p 4000` would otherwise install on the default port in silence.
   if (rest.length) return fail(`不认识的参数：${rest.join(" ")}\n\n${INIT_USAGE}`);
   if (existsSync(CONFIG_FILE)) return fail(`已经装过了：${CONFIG_FILE}`);
+  if (named.port === true) return fail(INIT_USAGE);
+  const portText = text(named.port) ?? "3350";
+  let port: number;
+  try {
+    port = parseListen(`127.0.0.1:${portText}`).port;
+  } catch {
+    return fail(`--port 要写 1 到 65535 之间的整数端口：${portText}`);
+  }
   privateDirectory(HOME);
   mkdirSync(path.join(HOME, "try"), { recursive: true });
   const hostName = hostname()
@@ -352,7 +365,6 @@ async function init(args: string[]) {
         "或者用 --command 指定别的命令行 Agent，比如 --command 'hermes chat -Q -q {prompt}'",
     );
   }
-  const port = text(named.port) ?? "3350";
   const url = `http://127.0.0.1:${port}`;
   const ownRules = !existsSync(RULES_FILE);
   if (ownRules) {
@@ -490,8 +502,8 @@ async function runs(args: string[]) {
   if (rest.length > 1 || named.before === true) return fail(RUNS_USAGE);
   const before = named.before === undefined ? undefined : runOf(named.before, RUNS_USAGE);
   const owner = ownerClient();
-  const { findRuns, runsText } = await import("./runs.ts");
-  const found = await findRuns((at) => owner.state(at), { rule: rest[0], before });
+  const { readRuns, runsText } = await import("./runs.ts");
+  const found = await readRuns(owner, rest[0], before);
   if (named.json !== undefined) return console.log(JSON.stringify({ runs: found.runs, before: found.more }, null, 2));
   const color = colorFor(process.stdout, process.env);
   console.log(runsText(found, { rule: rest[0], color, columns: process.stdout.columns }));
@@ -803,12 +815,11 @@ function runOf(word: string | undefined, usage: string) {
 }
 
 async function why(args: string[]) {
-  const id = runOf(
-    args.find((arg) => !arg.startsWith("--")),
-    "用法：agent-autoloop why <第几轮> [--json]",
-  );
+  const { named, rest } = flags(args);
+  if (rest.length !== 1) return fail(TAKES.why.usage);
+  const id = runOf(rest[0], TAKES.why.usage);
   const facts = await ownerClient().why(id);
-  if (args.includes("--json")) return console.log(JSON.stringify(facts, null, 2));
+  if (named.json !== undefined) return console.log(JSON.stringify(facts, null, 2));
   const { formatWhy } = await import("./why.ts");
   console.log(formatWhy(id, facts));
 }
@@ -867,6 +878,8 @@ async function service(args: string[]) {
   if (args[0] === "install") {
     // Installing over kept data comes here and not to init, and uninstalling took the links away.
     linkSkill();
+    const told = leftToSystem();
+    if (told) return console.log(told);
     installService();
     return waitForHub();
   }

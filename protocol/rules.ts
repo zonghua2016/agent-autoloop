@@ -84,6 +84,7 @@ function checkRule(issues: string[], rules: Rules, rule: Rule, names: Set<string
     ["skill", isText, NOT_EMPTY, true],
     ["prompt", isText, NOT_EMPTY, true],
     ["title", isTitle, "要是字母或数字开头、不含空白的一个词，占位符只能用 {id}、{subject}", true],
+    ["tags", isWords, "要是文字的列表", true],
     ["group", isText, NOT_EMPTY, true],
     ["parallel", isCount, "要是正整数", true],
     ["maxActive", isCount, "要是正整数", true],
@@ -151,7 +152,7 @@ export function parseRules(json: string, now: number, timezone: string): Rules {
     if (!ID.test(id)) issues.push(`来源的编号${ID_WORDS}：${id}`);
     checkFields(issues, `来源 ${id} `, source, [
       ["name", isText, NOT_EMPTY],
-      ["adapter", isText, NOT_EMPTY, true],
+      ["adapter", isId, ID_WORDS, true],
     ]);
   }
   rules.sources[SCHEDULE] = { name: "定时" };

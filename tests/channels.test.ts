@@ -9,6 +9,10 @@
 // An ask card that only takes choices loses the account someone would type; words without a choice must still answer.
 // A U+2028 or U+2029 in what someone typed, which JSON leaves as it is, cuts the click's line and loses the click.
 // Older lark-cli releases reject `--content -`, so a first card must not depend on that stdin convention.
+// A card lark-cli won't send is reported as the reason and the next step, on either exit code, not as the CLI's JSON;
+// the bot lacking a permission isn't sent to sign in again, which can't grant it.
+// Feishu still counting an old connection of the app makes lark-cli refuse every listener for hours: retried every ten
+// seconds, unexplained, that floods the log and hides that clicks aren't arriving; waiting it out mustn't hold up stopping.
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -157,6 +161,42 @@ test("feishu: a lark-cli that can't be started is said, not left to take the hub
   assert.match(lines[0] ?? "", /ENOENT/);
 });
 
+test("feishu: a listener Feishu refuses for another connection is explained and tried again slowly", async () => {
+  const calls = join(dir, "lark-refused.log");
+  const lark = join(dir, "lark-cli-refused");
+  writeFileSync(
+    lark,
+    `#!/bin/sh
+case "$*" in
+  *"event consume"*)
+    echo consume >> "${calls}"
+    echo "Error: failed_precondition: another event bus is already connected to this app (1 remote event connection(s) detected via API)" >&2
+    exit 1 ;;
+esac
+`,
+    { mode: 0o755 },
+  );
+  const stop = new AbortController();
+  const lines: string[] = [];
+  const hub = {
+    nextCard: () => new Promise((resolve) => stop.signal.addEventListener("abort", () => resolve({ card: null }))),
+  };
+  setTimeout(() => stop.abort(), 1_500);
+  const started = Date.now();
+  await feishu({
+    hub: hub as any,
+    options: { user: "ou_me", lark },
+    log: (line) => lines.push(line),
+    signal: stop.signal,
+  });
+  assert.ok(Date.now() - started < 4_000, "stopping doesn't wait out the pause before the next try");
+  assert.equal(readFileSync(calls, "utf8"), "consume\n");
+  const said = lines.join("\n");
+  assert.match(said, /卡片点击收不到/);
+  assert.match(said, /1 分钟后再试/);
+  assert.doesNotMatch(said, /10 seconds/);
+});
+
 test("feishu: a first card works without lark-cli's stdin content convention", async () => {
   const lark = join(dir, "lark-cli-no-stdin-content");
   writeFileSync(
@@ -282,6 +322,62 @@ esac
     calls.filter((c) => c[0] === "answer"),
     [["answer", 5, { choice: 1, by: "ou_me", ref: "om_5" }]],
   );
+});
+
+test("feishu: a card lark-cli won't send says why and what to do, not the CLI's error body", async () => {
+  const lark = join(dir, "lark-cli-refused-send");
+  // A stand-in for lark-cli: the bot missing a permission comes back on stderr with exit 1, a bad request as an error
+  // body with 0.
+  writeFileSync(
+    lark,
+    `#!/bin/sh
+case "$*" in
+  *"event consume"*) exec sleep 30 ;;
+  *+messages-send*)
+    case "$*" in
+      *card-expired-token*)
+        echo '{"ok":false,"identity":"bot","error":{"type":"authorization","subtype":"missing_scope","message":"app lacks im:message:send_as_bot","console_url":"https://open.feishu.cn/app/cli_x/auth"}}' >&2
+        exit 1 ;;
+      *card-bad-field*)
+        echo '{"ok":false,"error":{"type":"invalid_request","message":"msg_type is required"}}'
+        exit 0 ;;
+    esac ;;
+esac
+`,
+    { mode: 0o755 },
+  );
+  const stop = new AbortController();
+  const cards: (Card | null)[] = [
+    { ...base, title: "card-expired-token" },
+    { ...base, id: 6, title: "card-bad-field" },
+  ];
+  const failed: unknown[][] = [];
+  const hub = {
+    async nextCard() {
+      if (cards.length) return { card: cards.shift()! };
+      stop.abort();
+      return { card: null };
+    },
+    async failed(...args: unknown[]) {
+      failed.push(args);
+      return {};
+    },
+  };
+  const lines: string[] = [];
+  await feishu({
+    hub: hub as any,
+    options: { user: "ou_me", lark },
+    log: (line) => lines.push(line),
+    signal: stop.signal,
+  });
+  const said = failed.map((call) => String(call[2]));
+  assert.match(said[0] ?? "", /授权/, "a missing permission is named as one");
+  assert.match(said[0] ?? "", /开发者后台.*https:\/\/open\.feishu\.cn\/app\/cli_x\/auth/, "and says where to grant it");
+  assert.doesNotMatch(said[0] ?? "", /auth login/, "signing in again doesn't give the bot a permission");
+  assert.match(said[0] ?? "", /app lacks im:message:send_as_bot/, "lark-cli's own reason survives");
+  assert.match(said[1] ?? "", /msg_type is required/, "an error body with exit 0 is a failure too");
+  assert.doesNotMatch(said.join("\n"), /\{"ok":false/, "no raw JSON in what the hub records");
+  assert.match(lines.join("\n"), /card 5 not sent: .*开发者后台/, "the log says the same");
 });
 
 test("feishu: U+2028 and U+2029 in a handling note don't lose the click", async () => {

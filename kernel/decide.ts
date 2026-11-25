@@ -7,10 +7,12 @@ import { AuthError, Conflict, InputError, NotFound } from "./errors.ts";
 import { iso, rows, type Change, type Fact, type Row, type Table, type View } from "./evolve.ts";
 import {
   agentsOf,
+  askedAbout,
   cardView,
   configuration,
   eventsOf,
   jobOf,
+  limitOf,
   openInScope,
   pauseOf,
   routingOf,
@@ -39,6 +41,7 @@ export type Input = { type: string; args: any[] };
 const RESEND_AT = [0, 1, 3, 7, 15, 25, 35, 45, 55];
 /** The last resend and the minute it holds the card: after this a channel has given up. */
 const RESEND_WINDOW = 57 * MINUTE;
+const LIMIT_LONGEST = 8 * 24 * 60 * MINUTE;
 /** How long a chain of events causing events can get before it stops being dispatched. */
 const MAX_HOPS = 8;
 /** Failures in a row after which a run stops being retried: each try spends the owner's real tokens. */
@@ -113,7 +116,7 @@ function assignQueued(draft: Draft, run: Row) {
   const rule = ruleOf(config.value as Rules, run.rule);
   if (!rule) return;
   const session = rule.to === run.agent ? {} : nulls("session", "resume");
-  put(draft, "runs", run.id, { agent: rule.to, rules_version: config.version, ...session });
+  put(draft, "runs", run.id, { agent: rule.to, grp: rule.group, rules_version: config.version, ...session });
 }
 const threadOf = (run: Row) => ({ rule: run.rule, lane: run.lane, grp: run.grp });
 
@@ -154,6 +157,15 @@ const closeStopped = (draft: Draft, run: number, result: string) =>
 
 const closeOffline = (draft: Draft, worker: string) =>
   closeOpen(draft, (key) => key.startsWith(`worker:${worker}:offline:`), "连上了");
+
+/** An agent's usage limit is over; their shared card closes when nobody is waiting for that reset. */
+function lift(draft: Draft, agent: string, result: string) {
+  const { until } = draft.view.get("limits", agent)!;
+  set(draft, "limits", agent, null);
+  if (rows(draft.view, "limits", { until }).length === 0) {
+    closeOpen(draft, (key) => key === `limit:${until}`, result);
+  }
+}
 
 /** Whether a new stamp would tell nothing this one doesn't. One in the future means a clock was set back: it gets redone. */
 function justSeen({ now }: Draft, row?: Row) {
@@ -312,6 +324,8 @@ function claimNext(draft: Draft, worker: string, claim: string) {
     const rule = ruleNamed(draft, run.rule);
     // What was queued before a pause, or an answer that came in during one, waits for the resume.
     if (!rule || !agents.includes(rule.to) || pauseOf(draft.view, rule, draft.now)) return false;
+    // An agent out of quota fails each round within seconds: only one the owner asked for goes, to try it.
+    if (!run.manual && limitOf(draft.view, rule.to, draft.now)) return false;
     const agentLimit = draft.rules.agents[rule.to].maxActive;
     return (
       Date.parse(run.not_before) <= draft.now &&
@@ -383,8 +397,12 @@ function briefError(error: string, run: number) {
 function retryLater(draft: Draft, run: Row, result: Result) {
   const { id } = run;
   const attempts = run.attempts + 1;
-  const notBefore = draft.now + Math.min(5 * MINUTE * 2 ** (attempts - 1), 60 * MINUTE);
   const error = (result.error ?? "").trim().replace(/[。.]+$/, "") || "没说原因";
+  const told = result.limitedUntil === undefined ? 0 : Date.parse(result.limitedUntil);
+  // A usage limit resets within a week. A time further off is misread, and would hold the agent that long.
+  const limitedUntil = told > draft.now && told <= draft.now + LIMIT_LONGEST ? told : 0;
+  if (limitedUntil) limit(draft, run, limitedUntil, error);
+  const notBefore = Math.max(draft.now + Math.min(5 * MINUTE * 2 ** (attempts - 1), 60 * MINUTE), limitedUntil);
   const unclaimed = nulls("claim", "claimed_at", "seen_at", "cancel_at");
   const rejected: Rejected[] = [];
   for (const what of ["ask", "resolve", "later", "events"] as const) {
@@ -425,6 +443,32 @@ function retryLater(draft: Draft, run: Row, result: Result) {
   return rejected;
 }
 
+/** An agent out of quota gets no work until it resets, and the owner hears once when that is. */
+function limit(draft: Draft, run: Row, until: number, error: string) {
+  const held = limitOf(draft.view, run.agent, draft.now);
+  if (held && Date.parse(held.until) >= until) return;
+  if (draft.view.get("limits", run.agent)) lift(draft, run.agent, held ? "恢复时间推后了" : "恢复了");
+  put(draft, "limits", run.agent, {
+    agent: run.agent,
+    until: iso(until),
+    reason: error,
+    since: held?.since ?? draft.at,
+  });
+  const time = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: draft.rules.timezone,
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(until);
+  const words =
+    `有 Agent 用量到上限了，${time} 前不再派活给仍受限的 Agent。排着的和这期间新来的活都留着，到时自动接着做。` +
+    `运行 agent-autoloop status 可以查看当前受限项；想提前试，手动运行一条用到受限 Agent 的规则（agent-autoloop run），跑通就接着给它派活。`;
+  // Agents on one account are told the same moment: keyed by it, the owner hears of it once.
+  notify(draft, `limit:${iso(until)}`, "Agent 用量到上限", words);
+}
+
 function scheduleReview(draft: Draft, run: Row, later: Later) {
   const { rule, lane } = run;
   const [existing] = rows(draft.view, "timers", { rule, lane, key: later.key, event_id: null });
@@ -439,11 +483,17 @@ function scheduleReview(draft: Draft, run: Row, later: Later) {
     session,
     agent: run.agent,
     hops: hopsOf(draft, run),
+    // Written now, like `hops`: the row names no run for a later round to follow back from, and it is removed when the
+    // round it wakes ends, so the ids are recorded while the round that set the check is still here.
+    events: JSON.stringify(askedAbout(draft.view, run.id)),
   };
   if (existing) return void put(draft, "timers", existing.id, fields);
   const source = sourceOf(draft.view, run.id) ?? SCHEDULE;
   add(draft, "timers", { ...fields, rule, lane, key: later.key, source, event_id: null, created_at: draft.at });
 }
+
+const sameEvent = (kept: Row, sent: Row) =>
+  (["type", "subject", "summary", "detail", "link"] as const).every((field) => kept[field] === (sent[field] ?? ""));
 
 /** A receipt takes effect here, all of it in the one fact. */
 function applyReceipt(draft: Draft, run: Row, result: Result) {
@@ -475,7 +525,10 @@ function applyReceipt(draft: Draft, run: Row, result: Result) {
     if (rule?.emits && typeMatches(rule.emits.types, event.type)) {
       const sent = ingest(draft, rule.emits.source, { ...event, hops: hopsOf(draft, run) + 1 });
       // A number already taken is an earlier event's, perhaps another source's: what it says isn't what this receipt sent.
+      // Sending the same thing again under its fixed number is how sources stay idempotent, so only a clash is told.
       if (!sent.duplicate) emitted.push(sent.event);
+      else if (!sameEvent(draft.view.get("events", sent.event)!, event))
+        rejected.push({ what: "events", reason: `事件「${event.id}」这个编号已经记过另一件事，这次没有记` });
     } else rejected.push({ what: "events", reason: `规则「${run.rule}」没有写可以发 ${event.type}` });
   }
   // The source whose event this run took reads them back (`eventOutcome`); nothing else links them to the run.
@@ -502,16 +555,30 @@ function finish(draft: Draft, id: number, token: string, given: unknown) {
   let rejected: Rejected[] = [];
   // Told to stop, one that failed first has stopped all the same: trying again would start what the owner ended.
   if (result.outcome === "cancelled" || (result.outcome === "failed" && run.cancel_at)) {
+    // A failure here is the worker saying it couldn't see the stop finish: that, not "stopped", is what happened.
+    const error = result.outcome === "failed" ? result.error?.trim().replace(/[。.]+$/, "") : undefined;
     put(draft, "runs", id, {
       state: "cancelled",
       finished_at: draft.at,
       summary: result.summary ?? "",
+      ...(error ? { error } : {}),
       cancel_at: null,
     });
     clearFiredTimers(draft, run);
     closeStopped(draft, id, "已停止");
   } else if (result.outcome === "failed") rejected = retryLater(draft, run, result);
-  else rejected = applyReceipt(draft, run, result);
+  else {
+    rejected = applyReceipt(draft, run, result);
+    // Only the owner's round is handed out while an agent is held: getting through says it works again.
+    const held = limitOf(draft.view, run.agent, draft.now);
+    if (held && run.claimed_at >= held.since) {
+      // The rounds that hit the limit were put off to the reset: they go now with the rest.
+      for (const waiting of rows(draft.view, "runs", { state: "queued", agent: run.agent })) {
+        if (waiting.not_before === held.until) put(draft, "runs", waiting.id, { not_before: draft.at });
+      }
+      lift(draft, run.agent, "提前恢复了");
+    }
+  }
   put(draft, "runs", id, { last_answer: JSON.stringify(rejected) });
   return { rejected };
 }
@@ -571,7 +638,11 @@ function nextCard(draft: Draft, channel: string) {
     }
     const attempt = { tries: delivery.tries + 1, first_try_at: firstTry ?? draft.at, not_before: iso(now + MINUTE) };
     put(draft, "deliveries", key, { card_id: card.id, channel, ...attempt });
-    return cardView(card, draft.env, delivery.ref, draft.rules.channels[channel]?.links === true);
+    // The lane lets a channel send the card back to where its matter came from; the card page doesn't get it.
+    return {
+      ...cardView(card, draft.env, delivery.ref, draft.rules.channels[channel]?.links === true),
+      lane: card.lane,
+    };
   }
   return null;
 }
@@ -584,6 +655,9 @@ function tick(draft: Draft) {
     if (pause.until === null || Date.parse(pause.until) > now) continue;
     set(draft, "pauses", pause.name, null);
     reopen(draft, pause.name, Date.parse(pause.until));
+  }
+  for (const limit of rows(draft.view, "limits")) {
+    if (Date.parse(limit.until) <= now) lift(draft, limit.agent, "恢复了");
   }
   for (const rule of rules) {
     if (eventRule(rule)) continue;
@@ -613,6 +687,9 @@ function tick(draft: Draft) {
     const rule = ruleNamed(draft, timer.rule);
     const event = { id: `timer:${timer.id}`, type: "timer.due", subject: timer.lane, hops: timer.hops ?? 0 };
     const eventId = recordEvent(draft, timer.source, event, rule ? [rule.name] : []);
+    // The row these were written on is removed once the round this wakes ends, and an answer can wake a round after that:
+    // they travel with the event itself, which every later reader already has (#338).
+    if (timer.events) put(draft, "events", eventId, { events: timer.events });
     if (rule) {
       put(draft, "timers", timer.id, { event_id: eventId });
       enqueue(draft, rule, eventId, timer.lane, timer.agent === rule.to ? timer.session : null);
@@ -731,10 +808,23 @@ const CONTROL = {
 const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
   rules(draft, rules) {
     put(draft, "config", "rules", { value: rules, version: draft.seq });
+    // A schedule's next moment was worked out on the old zone's clock. Forgetting the cron it was counted for has the next
+    // tick count again from then, as for a changed cron; this input's own clock isn't the tick's.
+    if (draft.rules && rules.timezone !== draft.rules.timezone) {
+      for (const schedule of rows(draft.view, "schedules")) put(draft, "schedules", schedule.rule, { cron: null });
+    }
     for (const run of rows(draft.view, "runs", { state: "queued" })) {
       if (ruleOf(rules, run.rule)) assignQueued(draft, run);
       else stopRun(draft, run, "rule-gone", ...ruleGone(run.rule));
     }
+    // Groups are counted, and open cards found, by the group on each row: what's going and what's left open move with
+    // their rule, or the old group and the new each let a run through.
+    const moved = (table: Table, row: Row) => {
+      const group = ruleOf(rules, row.rule)?.group;
+      if (group !== undefined && group !== row.grp) put(draft, table, row.id, { grp: group });
+    };
+    for (const run of rows(draft.view, "runs", { state: ["claimed", "unknown"] })) moved("runs", run);
+    for (const card of rows(draft.view, "cards", { state: "open" })) moved("cards", card);
     closeOpen(draft, (key) => key.startsWith("rules:"), "改好了");
   },
   rulesError: (draft, problem) => notify(draft, `rules:${digest(problem)}`, "rules.json 写错了，还在用旧规则", problem),
@@ -802,7 +892,18 @@ const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
       clearFiredTimers(draft, run);
       closeStopped(draft, id, "已停止");
     } else if (run.state === "claimed") put(draft, "runs", id, { cancel_at: draft.at });
-    else throw new InputError("这一轮已经结束了");
+    // No worker reports this round any more, so there is no process a stop could reach and nothing to wait for: the owner
+    // ending it is the whole of it. The summary says it went quiet rather than that it stopped, which nobody knows.
+    else if (run.state === "unknown") {
+      put(draft, "runs", id, {
+        state: "cancelled",
+        finished_at: draft.at,
+        summary: "本人停掉：这一轮早已没有回音",
+        cancel_at: null,
+      });
+      clearFiredTimers(draft, run);
+      closeStopped(draft, id, "本人不再等了");
+    } else throw new InputError("这一轮已经结束了");
   },
   resolve(draft, id, reason, by) {
     const card = draft.view.get("cards", id);

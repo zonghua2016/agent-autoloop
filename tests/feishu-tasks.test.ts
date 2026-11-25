@@ -1344,3 +1344,20 @@ test("saving successive delivered cards preserves every message reference", () =
     store.close();
   }
 });
+
+test("ending an unheard verification round does not claim its process stopped", async (t) => {
+  const f = fixture(t, async () => ({ ...plan, kind: "verify" }));
+  f.inbox.receive(message("om_unheard", "验收组件"));
+  await f.inbox.tick();
+  f.inbox.receive(message("om_confirm_unheard", "确认"));
+  await f.inbox.tick();
+  f.ports.outcome = async () => ({
+    runs: [{ id: 1, state: "cancelled", summary: "本人停掉：这一轮早已没有回音", error: "进程可能还在" }],
+  });
+  await f.inbox.tick();
+  const reply = f.replies.findLast((r) => r.key.startsWith("ft-result-"))!;
+  assert.ok(reply);
+  assert.doesNotMatch(reply.text, /本轮已停止/);
+  assert.match(reply.text, /进程可能还在/);
+  assert.equal(f.inbox.proposals()[0].delivery?.title, "验收已结束");
+});
