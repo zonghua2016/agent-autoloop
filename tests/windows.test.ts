@@ -446,7 +446,7 @@ test(
   { skip: !windows || !!process.env.CI },
   async (t) => {
     const sid = powershell(
-      `try { ([Security.Principal.NTAccount]::new($env:COMPUTERNAME, 'CodexSandboxUsers')).Translate([Security.Principal.SecurityIdentifier]).Value } catch [Security.Principal.IdentityNotMappedException] { }`,
+      `try { ([Security.Principal.NTAccount]::new($env:COMPUTERNAME, 'CodexSandboxUsers')).Translate([Security.Principal.SecurityIdentifier]).Value } catch [Security.Principal.IdentityNotMappedException] { exit 0 }`,
     );
     if (!sid) return t.skip("Codex elevated sandbox is not installed");
     const home = join(scratch, "sandbox-data");
