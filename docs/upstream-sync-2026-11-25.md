@@ -28,7 +28,7 @@
 
 ## CI 与后续观察
 
-首次 Windows CI 暴露本地扩展测试的平台假设：飞书 CLI 的 shebang 假程序按现有 Unix 测试入口运行；Unicode 路径继续跨平台验证，换行文件名仅在允许它的 Unix 文件系统验证；多连接 SQLite 测试统一先关闭全部连接再删除目录；本地 Git remote 的测试重写使用 file URL，避免 Windows 盘符差异。真实 Windows 结果以最终 CI 为准。
+首次 Windows CI 暴露本地扩展测试的平台假设：飞书 CLI 的 shebang 假程序按现有 Unix 测试入口运行；Unicode 路径继续跨平台验证，换行文件名仅在允许它的 Unix 文件系统验证；多连接 SQLite 测试统一先关闭全部连接再删除目录；Codeup 测试断言附上实际错误卡片以定位失败原因。真实 Windows 结果以最终 CI 为准。Linux CI 还暴露假 CLI 在送达记录登记前触发按钮的时序问题；集成测试改为等实际卡片 ref 绑定后再模拟点击，授权与重复点击断言保持不变。真实用户在服务端已显示卡片但本地送达绑定前点击，仍可能被忽略，本次未改变该低频窗口。第二轮 Windows CI 将剩余失败定位到 Codex ACL 脚本：没有 CodexSandboxUsers 时的 return 使独立 PowerShell 进程返回失败；改为仅此已识别的缺组分支 exit 0，其他 ACL 错误仍失败，并补真实 Windows 命令准备回归。
 
 DeepSeek 两次审查均超时，未取得完整结论。其部分输出中，主控和独立 Codex 核实了一项后续观察：同一 Claude Agent 的并行轮次分别报告 T1、T2 恢复时间，并在 T1 前手动成功时，仅等待 T2 的轮次立即恢复，等待 T1 的旧轮次仍延迟到 T1；任务未丢失。DSH/agy 当前不产生 limitedUntil，不受此路径影响。按仓库对罕见组合的范围约束，本批记录而不扩改内核。其他关于空字段误判、跨来源事件冲突与 unknown 释放名额的推测，与字段标准化、按来源去重及已有计数代码不符，未采纳。
 

@@ -5,7 +5,6 @@ import { execFile } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { createServer } from "node:http";
 import { git } from "../plugins/codeup/git.ts";
 import { parseResult } from "../protocol/validate.ts";
@@ -216,7 +215,7 @@ test("React and NestJS enter through developer, real Git, HTTP, CR, approval, Fl
               AGENT_AUTOLOOP_CONTEXT: contextFile,
               YUNXIAO_TOKEN: "fake-test-token",
               GIT_CONFIG_COUNT: "1",
-              GIT_CONFIG_KEY_0: `url.${pathToFileURL(repository).href}.insteadOf`,
+              GIT_CONFIG_KEY_0: `url.${repository}.insteadOf`,
               GIT_CONFIG_VALUE_0: "https://codeup.aliyun.com/org/demo.git",
             },
             encoding: "utf8",

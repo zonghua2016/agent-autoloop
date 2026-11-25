@@ -4,7 +4,8 @@
 // powershell.exe an Agent left in the turn's folder runs, outside its sandbox, in place of the system's; the npm.cmd and
 // npx.cmd that npm 10 and later write, which name their script through a variable, can't be run at all; a command line
 // longer than Windows starts fails with only "spawn ENAMETOOLONG", which doesn't say what is too long or what to do;
-// a running turn launches PowerShell just to check a child process the worker still holds.
+// a running turn launches PowerShell just to check a child process the worker still holds; Codex command preparation
+// fails on a machine that has no elevated sandbox account.
 import assert from "node:assert/strict";
 import { createHook } from "node:async_hooks";
 import { spawnSync } from "node:child_process";
@@ -475,3 +476,23 @@ test(
     assert.equal(rights(key), "", "the sandbox was given the master key");
   },
 );
+
+test("Windows Codex prepares a turn even without an elevated sandbox installation", { skip: !windows }, async () => {
+  const folder = join(scratch, "codex-command");
+  mkdirSync(folder);
+  const contextFile = join(folder, "context.json");
+  writeFileSync(contextFile, '{"events":[]}');
+  const { default: codex } = await import("../plugins/codex/agent.ts");
+  const command = codex.command({
+    contextFile,
+    folder,
+    cwd: folder,
+    program: process.execPath,
+    prompt: "Read the context.",
+    access: "read",
+    session: "",
+    resume: null,
+  });
+  assert.equal(command[0], process.execPath);
+  assert.equal(command[1], "exec");
+});

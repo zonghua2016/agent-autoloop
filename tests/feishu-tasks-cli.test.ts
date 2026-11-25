@@ -3,13 +3,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { interpretMessage, parseTask } from "../plugins/feishu-tasks/parser.ts";
 import { readMessageImage } from "../plugins/feishu-tasks/image.ts";
 import channel, { runInbox } from "../plugins/feishu-tasks/channel.ts";
+import { TaskStore } from "../plugins/feishu-tasks/inbox.ts";
 
 const plan = { project: "palette", kind: "feature", summary: "新增组件", detail: "新增组件并构建通过", questions: [] };
 
@@ -359,7 +360,9 @@ test(
   async (t) => {
     const f = setup(t),
       sent = join(f.dir, "button-replies.jsonl"),
-      cardFile = join(f.dir, "card.json");
+      cardFile = join(f.dir, "card.json"),
+      delivered = join(f.dir, "card-delivered"),
+      database = join(f.dir, "buttons.db");
     const lark = join(f.dir, "lark-buttons");
     const input = {
       message_id: "om_task",
@@ -379,7 +382,7 @@ if(args[0]==='event'){
  if(args[2]==='im.message.receive_v1')console.log(JSON.stringify(${JSON.stringify(input)}));
  let clicked=false;
  setInterval(()=>{
-  if(args[2]==='card.action.trigger'&&!clicked&&fs.existsSync(${JSON.stringify(cardFile)})){
+  if(args[2]==='card.action.trigger'&&!clicked&&fs.existsSync(${JSON.stringify(delivered)})){
    const value=JSON.parse(fs.readFileSync(${JSON.stringify(cardFile)},'utf8'));
    console.log(JSON.stringify({operator_id:'ou_me',message_id:'om_proposal',action_value:JSON.stringify(value)}));
    console.log(JSON.stringify({operator_id:'ou_me',message_id:'om_proposal',action_value:JSON.stringify(value)}));
@@ -426,7 +429,7 @@ if(args[0]==='event'){
           bot: "ou_bot",
           senders: ["ou_me"],
           sourceKey: "source-key",
-          database: join(f.dir, "buttons.db"),
+          database,
           url: `http://127.0.0.1:${(server.address() as any).port}`,
           parser: { use: "dsh", program: f.parser },
           projects: [
@@ -445,6 +448,16 @@ if(args[0]==='event'){
     try {
       let lines: any[] = [];
       for (let n = 0; n < 130; n++) {
+        // Exercise clicks after the delivery reference is persisted.
+        if (!existsSync(delivered) && existsSync(database)) {
+          const store = new TaskStore(database);
+          try {
+            if (store.tasks().some((task) => task.cards?.some((card) => card.ref === "om_proposal")))
+              writeFileSync(delivered, "ready");
+          } finally {
+            store.close();
+          }
+        }
         try {
           lines = readFileSync(sent, "utf8")
             .trim()
