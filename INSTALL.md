@@ -1,5 +1,9 @@
 # 安装说明（写给 Agent）
 
+[个人 Agent 接入说明](examples/recipes/personal/README.md)包含独立记忆配置、DSH 与 Antigravity CLI（`agy`）候补、飞书私聊和项目规则。配置生成器输出可核对的规则片段。
+
+Codeup / 云效 Flow 用户在基础服务运行后，按[接入示例](examples/recipes/codeup/README.md)准备项目登记、目标分支交付设置、独立检查流水线及飞书答复人。CR 和 CI 通过后才创建 MR。需要连接本机服务的项目可登记本地环境文件和变量名。独立 MySQL 迁移测试需在接单机安装 MySQL 8 服务端和客户端。飞书只验收需同时登记项目的 `events.verify` 和对应验收规则。 `plugins/codeup/configure.ts` 只生成待合入规则；`doctor.ts` 不触发部署。没有令牌或未核实原生门禁时，不启用自动合并与发布。
+
 用户请你装好 Agent 自动化中台。先安装，再走一遍提问和继续处理；能自己做的直接做。
 
 ## 安装
@@ -91,6 +95,8 @@ Claude 要委托 Codex 处理网页时，可用[浏览器交接模板](examples/
 
 ## 写第一条规则
 
+需要飞书私聊或群内 @ 用自然语言派活时，按[飞书任务入口](examples/recipes/feishu-tasks/README.md)启用可选 `feishu-tasks` 通道。先核实本人、机器人 open_id、允许的群范围和消息权限；这不是安装后默认开启的功能。已启用入口的旧配置可继续使用；明确指令直接处理，口语确认或取消仅引导原卡片，私聊解析窗口包含最近八轮已回复的交流。
+
 安装验证完成后，按用户希望自动处理的事从 [README 的场景模板](README.md#拿来即用的场景模板)选一个，再照[配置手册](skills/agent-autoloop/SKILL.md)写规则；用户还没指定用途时再问。用 `agent-autoloop check` 检查；改动几秒内生效。
 
 国内业务可从反馈处理、网站巡检、飞书周报与业务摘要三套模板开始。它们默认飞书本人私聊；替换占位符后，配置和业务资料留在私有目录，不提交到仓库。模板不替用户新建凭据或扩大飞书权限。
@@ -118,3 +124,7 @@ agent-autoloop uninstall
 - [安全边界](SECURITY.md)：密钥、执行权限和交付审查。
 
 Windows 开发检查用 `npm run test:windows` 与 `node scripts/install-smoke-windows.ts`。Linux/macOS 用 `npm run test:quick`（改了 `kernel/`、`protocol/`、`sim/` 时用 `npm test`）、`npm run typecheck`、`npm run format:check`，完整故障检查和性能实测用 `npm run test:nightly`。备份和恢复见[配置手册](skills/agent-autoloop/SKILL.md#日志与恢复)。`master.key` 坏了中台会拒绝启动：从备份恢复；没有备份就删掉它，重启会生成新的，已发出的卡片链接和正在跑的轮次会失效。
+
+飞书自然语言任务摘要支持“确认”“取消”按钮，点击后更新卡片状态；文字确认和取消仍兼容。旧摘要卡片失效后不能派发任务，详见[任务入口说明](examples/recipes/feishu-tasks/README.md)。
+
+本机看板独立启动，用本机配置中的本人密钥登录后默认管理可写；需要展示用途时加 `--readonly`。启动命令及验证入口见[看板说明](examples/recipes/live-dashboard/README.md)。个人聊天默认本地保存，可用 `recordChats: false` 关闭；主动关怀仍需单独开启。

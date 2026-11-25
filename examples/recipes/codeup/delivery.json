@@ -1,0 +1,12 @@
+{
+  "ci": { "pipeline": "0", "env": {} },
+  "checks": [{ "name": "autoloop-ci", "writers": ["REPLACE_SERVICE_USER_ID"] }],
+  "sensitive": ["src/auth/**", "src/payment/**", "prisma/**", "scripts/**", "Dockerfile"],
+  "review": {
+    "model": "gpt-6-astra",
+    "effort": "high",
+    "points": "只报告可证实的真实错误、安全和发布问题。说明触发条件及文件行号。同类问题一次列出；不报告代码风格或无依据的假设。"
+  },
+  "autoMerge": false,
+  "protectedBranchVerified": false
+}

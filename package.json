@@ -17,6 +17,8 @@
   "scripts": {
     "test": "node --disable-warning=ExperimentalWarning --test tests/*.test.ts",
     "test:quick": "node --disable-warning=ExperimentalWarning --test \"tests/!(simulation).test.ts\"",
+    "test:codeup": "node --disable-warning=ExperimentalWarning --test tests/codeup*.test.ts",
+    "codeup:doctor": "node plugins/codeup/doctor.ts",
     "typecheck": "tsc -p .",
     "format": "prettier --write \"**/*.{ts,json,yml}\"",
     "format:check": "prettier --check \"**/*.{ts,json,yml}\"",

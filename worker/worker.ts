@@ -277,7 +277,11 @@ export function createWorker({
     }
     // Login shells don't agree on how a command reads its arguments (fish has no $0 or $@), so the command waits in a
     // file for /bin/sh. Its path travels by environment because the install path can hold any character.
-    writeFileSync(command, `unset AGENT_AUTOLOOP_COMMAND\nexec ${argv.map(quoted).join(" ")}\n`, { mode: 0o600 });
+    writeFileSync(
+      command,
+      `unset AGENT_AUTOLOOP_COMMAND\nexec ${argv.map(quoted).join(" ")} >${quoted(out)} 2>${quoted(err)}\n`,
+      { mode: 0o600 },
+    );
     // Output and the exit code go through the shell, so they land in their files even if this program has gone by then.
     const script = [
       "out=$1",
@@ -285,8 +289,10 @@ export function createWorker({
       "result=$3",
       "shift 3",
       "umask 077",
-      '"$@" >"$out" 2>"$err"',
-      'echo $? >"$result.tmp"',
+      '"$@" >"$out.startup" 2>"$err.startup"',
+      "code=$?",
+      '[ -e "$err" ] || cp "$err.startup" "$err"',
+      'echo "$code" >"$result.tmp"',
       'mv "$result.tmp" "$result"',
       // A final external command can replace the shell before publishing its exit file.
       ":",
@@ -343,7 +349,12 @@ export function createWorker({
   function read(entry: Entry, adapter: Adapter, code: number | null): Reading {
     const { out, err } = files(entry);
     try {
-      const reading = adapter.read(snapshot(out), code, code === null ? "" : snapshot(err));
+      // Sampling is only for live progress. Cutting a final JSON frame can erase both the result and its started marker.
+      const reading = adapter.read(
+        code === null ? snapshot(out) : existsSync(out) ? readFileSync(out, "utf8") : "",
+        code,
+        code === null ? "" : snapshot(err),
+      );
       if (!reading) throw new Error("它什么也没给");
       return reading;
     } catch (error) {

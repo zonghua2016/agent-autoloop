@@ -170,17 +170,25 @@ export function stateOf(now: number, before: number | undefined, rules: Rules, {
   const skippedAt = new Map(
     all<Row>("SELECT rule, skipped_at FROM schedules").map((row) => [row.rule, row.skipped_at]),
   );
+  const sourceCounts = new Map(
+    all<Row>("SELECT source, COUNT(*) AS n FROM events GROUP BY source").map((row) => [row.source, row.n]),
+  );
   return {
     now: iso(now),
     timezone: rules.timezone,
     spending: spendingOf(all, now, rules.timezone),
     totals: { ...tally(counts), attention: openCards.length },
     // The owner's own: which matter a card is about, and what its asker left for whoever carries on. Channels don't get them.
-    cards: openCards.map((card) => ({ ...view(card), lane: card.lane, about: card.about })),
-    recentCards: recentCards.map((card) => ({ ...view(card), lane: card.lane, about: card.about })),
+    cards: openCards.map((card) => ({ ...view(card), lane: card.lane, about: card.about, runId: card.run_id ?? null })),
+    recentCards: recentCards.map((card) => ({
+      ...view(card),
+      lane: card.lane,
+      about: card.about,
+      runId: card.run_id ?? null,
+    })),
     timers: timers.map(({ rule, lane, key, about, at }) => ({ rule, lane, key, about, at })),
     sources: Object.entries(rules.sources).map(([id, { name }]) => {
-      const events = all<Row>("SELECT COUNT(*) AS n FROM events WHERE source = ?", [id])[0].n as number;
+      const events = (sourceCounts.get(id) ?? 0) as number;
       return { id, name, events };
     }),
     lines: rules.rules.map((rule) => ({

@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="连接本机中台的任务管理看板。">
+  <title>Autoloop 管理园区</title>
+  <link rel="stylesheet" href="./park.css">
+  <script type="importmap">{"imports":{"three":"./vendor/three.module.js","three/addons/":"./vendor/addons/"}}</script>
+</head>
+<body>
+  <main class="park">
+    <header class="topbar">
+      <div class="brand"><span class="brand-icon" aria-hidden="true"><i></i><i></i><i></i></span><div><b>Autoloop</b><span>自动化园区</span></div></div>
+      <div class="top-meta"><span class="demo">正在读取权限</span><span id="health-summary"></span><span id="connection" role="status">正在连接中台</span><button id="logout" type="button">退出登录</button><button id="fullscreen" type="button" title="全屏" aria-label="全屏">⛶</button></div>
+    </header>
+    <section class="view" aria-label="自动化园区三维场景">
+      <div id="viewport"></div>
+      <div id="pins" aria-label="园区站点"></div>
+      <div id="live-packages" aria-label="实际轮次包裹"></div>
+      <div class="loading" id="loading" role="status"><span></span>正在布置园区</div>
+      <div class="scene-hud">
+        <div class="scene-name"><span>运行总览</span><h1>任务园区</h1><p><i></i><span id="scene-state">正在读取状态</span></p><time id="snapshot-time"></time></div>
+        <div class="scene-clock" aria-label="时间和天气">
+          <time id="clock">--:--</time><span id="weather-label">正在获取天气</span>
+          <details class="weather-settings">
+            <summary>天气设置</summary>
+            <div class="weather-menu">
+              <label for="weather-city">天气城市</label><select id="weather-city"></select>
+              <label><input id="weather-remote" type="checkbox" checked>启用外部天气</label>
+              <button id="weather-location" type="button" hidden>使用大致位置查天气</button>
+              <small id="weather-note" role="status"></small>
+              <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">天气数据 · Open-Meteo</a>
+            </div>
+          </details>
+        </div>
+      </div>
+      <div class="scene-toolbar">
+        <div class="legend"><span><i></i>任务去程</span><span><i></i>回答回程</span></div>
+        <div class="segments" aria-label="环境">
+          <button type="button" data-weather="auto" aria-pressed="true">自动</button>
+          <button type="button" data-weather="day" aria-pressed="false">晴</button>
+          <button type="button" data-weather="night" aria-pressed="false">夜景</button>
+          <button type="button" data-weather="cloud" aria-pressed="false">多云</button>
+          <button type="button" data-weather="rain" aria-pressed="false">雨</button>
+          <button type="button" data-weather="snow" aria-pressed="false">雪</button>
+        </div>
+      </div>
+    </section>
+    <section class="dock" aria-label="当前轮次与查看方式">
+      <button id="browse" type="button" class="primary" aria-controls="live-panel" aria-expanded="false">轮次与待办</button>
+      <button id="follow" type="button" aria-pressed="false" disabled>跟随包裹</button>
+      <div class="readout" aria-live="polite" aria-atomic="true">
+        <div><span id="object" class="object">当前中台</span><strong id="status">正在连接</strong></div>
+        <p id="detail"></p>
+      </div>
+      <button id="history" type="button" aria-controls="live-panel" disabled>查看时间线</button>
+    </section>
+    <aside id="live-panel" class="live-panel" aria-labelledby="panel-title" hidden>
+      <div class="panel-head"><h2 id="panel-title">轮次与待办</h2><button id="live-close" type="button" aria-label="关闭详情">×</button></div>
+      <div id="list-controls" class="list-controls" aria-label="轮次分类">
+        <button type="button" data-filter="active" aria-pressed="true">进行中</button>
+        <button type="button" data-filter="asks" aria-pressed="false">等回答</button>
+        <button type="button" data-filter="finished" aria-pressed="false">最近结束</button>
+        <button type="button" data-filter="unrouted" aria-pressed="false">未分派</button>
+        <button type="button" data-filter="feishu" aria-pressed="false">飞书事项</button>
+        <button type="button" data-filter="health" aria-pressed="false">规则与健康</button>
+        <input id="task-search" type="search" placeholder="搜索任务、规则、事项" aria-label="搜索任务">
+        <select id="project-filter" aria-label="筛选项目"><option value="">全部项目</option></select>
+        <button type="button" id="clear-station" hidden>所有站点</button>
+      </div>
+      <div id="live-list" class="panel-scroll"></div>
+      <div id="detail-shell" class="panel-scroll" hidden><button type="button" id="live-back">返回列表</button><div id="live-detail"></div></div>
+    </aside>
+    <output id="station-detail" class="station-detail" hidden></output>
+  </main>
+  <script type="module" src="./boot.js"></script>
+</body>
+</html>

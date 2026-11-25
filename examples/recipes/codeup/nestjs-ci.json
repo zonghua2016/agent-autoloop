@@ -1,0 +1,11 @@
+{
+  "kind": "nestjs",
+  "commands": [
+    ["npm", "ci"],
+    ["npx", "--no-install", "eslint", "src/**/*.ts", "test/**/*.ts"],
+    ["npx", "--no-install", "tsc", "--noEmit"],
+    ["npm", "test", "--", "--ci", "--runInBand"],
+    ["npm", "run", "build"]
+  ],
+  "versionFiles": ["dist/version.json"]
+}

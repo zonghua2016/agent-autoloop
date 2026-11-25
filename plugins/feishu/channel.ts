@@ -100,7 +100,11 @@ export function render(card: Card) {
   };
 }
 
-export default async function feishu({ hub, options, log, signal }: ChannelContext) {
+export default async function feishu(
+  { hub, options, log, signal }: ChannelContext,
+  onAction?: (event: unknown) => boolean | Promise<boolean>,
+  onDelivered?: (card: Card, ref: string, owner: string) => void | Promise<void>,
+) {
   const program = (options.lark as string | undefined) ?? "lark-cli";
   const lark = async (args: string[], input?: string) => {
     const printed = await new Promise<string>((resolve, reject) => {
@@ -160,6 +164,11 @@ export default async function feishu({ hub, options, log, signal }: ChannelConte
           // The key is the card alone, not its version: a report that got lost must not make a second message.
         } else ref = await sendMessage(`agent-autoloop-card-${card.id}`, content);
         await hub.delivered(card.id, card.version, ref);
+        try {
+          await onDelivered?.(card, ref, owner);
+        } catch {
+          log(`card ${card.id}: 已送达，附加记录失败`);
+        }
       } catch (error) {
         log(`card ${card.id} not sent: ${error}`);
         await hub.failed(card.id, card.version, String(error)).catch(() => {});
@@ -170,6 +179,7 @@ export default async function feishu({ hub, options, log, signal }: ChannelConte
   /** Only the owner's click on the card that was sent counts; the hub checks both. */
   async function clicked(line: string) {
     const event = JSON.parse(line);
+    if (await onAction?.(event)) return;
     const form = safeJson(event.form_value);
     const value = safeJson(event.action_value);
     // A form's submit button can't carry a value, so its name holds the card's number.

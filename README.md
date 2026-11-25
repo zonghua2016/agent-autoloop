@@ -1,5 +1,7 @@
 # Agent Autoloop
 
+可选的[个人 Agent](examples/recipes/personal/README.md)提供跨模型记忆、复盘、关怀、多模型论证和 Bug 领取。论证可配置 DSH、Antigravity CLI（`agy`）和 Codex 候补，完成后按项目规则派给开发执行器。
+
 **让你的命令行 Agent 在后台自己接活、自己跟进到底；平时不烦你，遇到拿不准的事才发卡片找你拍板。**
 
 **中文** | [English](README.en.md)
@@ -178,9 +180,13 @@ OpenClaw 的 `agent exec` 每次默认最多跑 600 秒，到点就算失败；�
 
 **交付流水线。** 配好交付规则后，给 GitHub PR 打上 `deliver` 标签后，它会自己跟进到上线：**审代码 → 等 CI → 合并 PR → 等部署 → 核对线上版本**。审查可以按写代码的 Agent 指定，也可以让多个项目共用一份策略。审查和交付配置只从 `main` 读取，绝不在接单电脑上检出或运行 PR 里的代码；排队、并发和重试直接复用内核。
 
+**Codeup / 云效 Flow。** 可选的 [`codeup` 插件](examples/recipes/codeup/README.md) 提供独立 worktree 开发、Codex CR、Flow CI、失败返修和合并审批。登记交付后先通过 CR 和 CI，再创建 MR，经飞书批准后请求合并。未配置交付时保留本地提交。项目可为 worktree 指定本地环境变量，迁移测试可使用独立临时 MySQL。React、NestJS 使用项目自己的检查命令；云效令牌、保护分支与流水线需另行配置和真实验收，不影响原 GitHub 流程。
+
 **写自己的插件。** 从 [Agent](examples/plugins/hello-agent/agent.ts)、[通道](examples/plugins/hello-channel/channel.ts)、[事件](examples/plugins/hello-source/source.ts) 三个可运行的最小模板开始，见[插件开发说明](docs/plugins.md)。要让 Agent 操作网页，先看[浏览器接入](docs/plugins.md#浏览器接入)。命令行和 [MCP](skills/agent-autoloop/SKILL.md#mcp-与密钥撤销) 也能查看和回答卡片。
 
 ## 内核的四个机制
+
+**飞书自然语言派活（可选）**：使用 [`feishu-tasks`](examples/recipes/feishu-tasks/README.md) 通道插件，接收白名单用户的私聊或群内明确 @，整理需求并在确认后派给已登记项目。只验收可单独运行项目检查，待办可用明确指令取消，口语确认或取消会提示操作原卡；明确指令免调模型，私聊带最近八轮已回复的上下文，闲聊不会改动任务。原卡片通知和回答照旧，项目路径及权限仍由可信规则决定。
 
 内核没有运行时依赖。它不读系统时钟、不用随机数、不向外发请求，插件主动连进来，账号凭据留在各自的插件里；同样的输入永远得出同样的结果。它把四个计算机领域的成熟做法用到了命令行 Agent 上：
 
@@ -267,3 +273,7 @@ Apple M5 Pro、24 GB、Node 24.21.0。写入逐条提交，事务落盘后才应
 </details>
 
 [MIT License](LICENSE)
+
+飞书自然语言任务摘要支持“确认”“取消”按钮，点击后更新卡片状态；文字确认和取消仍兼容。旧摘要卡片失效后不能派发任务，详见[任务入口说明](examples/recipes/feishu-tasks/README.md)。
+
+可选的[本机管理看板](examples/recipes/live-dashboard/README.md)使用本人密钥登录后默认可写，支持 `--readonly`；会话 12 小时有效，可退出撤销；七站点展示 DeepSeek 与 Gemini，管理卡片、轮次、规则及本人飞书草稿。

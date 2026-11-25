@@ -1075,3 +1075,44 @@ for (const [what, script, why] of [
     assert.equal(groupGoing(pid), false, "and nothing of it is left");
   });
 }
+
+// Startup diagnostics must not corrupt an adapter's JSON protocol.
+test("login shell diagnostics are isolated from agent output", { skip: process.platform === "win32" }, async () => {
+  const shell = join(home, "noisy-login");
+  writeFileSync(shell, '#!/bin/sh\necho startup-banner\necho startup-warning >&2\nexec /bin/sh "$@"\n', {
+    mode: 0o700,
+  });
+  const previous = process.env.SHELL;
+  process.env.SHELL = shell;
+  try {
+    const hub = fakeHub();
+    hub.jobs.push(job({ use: "naive", command: [`printf '{"text":"好了","session":"noisy"}'`] }));
+    const running = worker(hub);
+    await until(running, () => hub.results.length > 0);
+    assert.equal(hub.results[0].outcome, "done");
+    assert.equal(hub.results[0].summary, "好了");
+  } finally {
+    if (previous === undefined) delete process.env.SHELL;
+    else process.env.SHELL = previous;
+  }
+});
+
+test("a completed large single-line JSON result retains its answer and original session", async () => {
+  const script = join(folder, "large-result.mjs");
+  writeFileSync(
+    script,
+    `console.log(JSON.stringify({text:'做完了',started:true,session:'large-session',padding:'x'.repeat(2*1024*1024)}));`,
+  );
+  mkdirSync(join(home, "plugins", "large"), { recursive: true });
+  writeFileSync(
+    join(home, "plugins", "large", "agent.ts"),
+    `export default {command:t=>[${JSON.stringify(process.execPath)},${JSON.stringify(script)}],read:(out,code)=>code===null?{started:true}:JSON.parse(out)};`,
+  );
+  const hub = fakeHub(),
+    given = job({ use: "large", session: "original-session" });
+  hub.jobs.push(given);
+  const w = worker(hub);
+  await until(w, () => hub.results.length === 1);
+  assert.equal(hub.results[0].outcome, "done");
+  assert.equal(hub.results[0].session, "large-session");
+});

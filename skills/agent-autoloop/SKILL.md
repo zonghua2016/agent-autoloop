@@ -3,6 +3,8 @@ name: agent-autoloop
 description: 配置 Agent 自动化中台：加规则、接新的事件插件、接新的 Agent、接新的通道（飞书、QQ、钉钉、企微……）、写处理手册、部署到服务器、多台电脑。用户说“有事的时候让 Agent 自己处理”“每天几点让 Agent 做某事”“接一下 GitHub / 告警 / 某个系统”“换一个模型”“在飞书里批”“加一台电脑”时用。
 ---
 
+[个人 Agent](../../examples/recipes/personal/README.md)提供配置方法、定时复盘、关怀、任务论证及 Bug 来源。DSH、`agy` 和 Codex 可作为只读资料处理的候补，开发执行器由可信规则选择。
+
 # Agent 自动化中台
 
 协议全文在 `docs/protocol.md`，这里是怎么做。程序在 `~/.agent-autoloop/app`，规则在 `~/.agent-autoloop/rules.json`，配置和密钥在 `~/.agent-autoloop/config.json`。
@@ -91,6 +93,8 @@ Claude 主任务要委托 Codex 操作网页时，从 `examples/recipes/browser-
 
 ## 接一个通道
 
+飞书需要私聊或群内 @ 下任务时，用 `plugins/feishu-tasks/channel.ts` 包装原卡片通道，配置与验证步骤见 `examples/recipes/feishu-tasks/README.md`。使用独立来源密钥，只允许已登记项目、发送人和确认后的任务；不把消息内容当配置。配置 `tasks.groups` 可限制群范围，省略时也必须由白名单本人明确 @ 机器人。
+
 配置在两处：`rules.json` 的 `channels` 登记（`answerers` 是谁能回答，没写时通道里谁都能回答，`doctor` 会提醒），`config.json` 的 `channels` 写密钥和选项。`agent-autoloop key new channel <名字>` 拿密钥（先问用户）。改了 `config.json` 要 `agent-autoloop service install` 重启。默认每张卡片发到所有通道；某条规则的卡片只想发到某几个通道，在这条规则里写 `"channels": ["feishu"]`；通道多了，`tell`、中台自己的告警这些不属于哪条规则的卡片会每个通道各发一遍，在 `rules.json` 顶层写 `"defaultChannels": ["feishu"]`，自己没写 `channels` 的都只发那几个。
 
 **桌面通知**：新装的中台默认开着（`plugins/desktop/channel.ts`），两处各有一个 `desktop`。卡片第一次发送时，macOS 用 `osascript`、Linux 用 `notify-send`、Windows 用 PowerShell 系统托盘通知弹一条通知，标题为“Agent 问你一个问题”，正文是卡片标题、“来源：<规则名>”（卡片带规则且标题不是规则名时）和“运行 agent-autoloop status 查看”，不能在通知上回答。没有图形会话时安静跳过，问题仍在；通知命令失败时报告失败，不会让中台退出。接了别的通道可以留着它；不想要就把两处的 `desktop` 都删掉，再重启。以前装的中台不会自动加上它。
@@ -111,6 +115,8 @@ Claude 主任务要委托 Codex 操作网页时，从 `examples/recipes/browser-
 **有按钮的新通道**：在 `~/.agent-autoloop/plugins/<名字>/channel.ts` 写一个，照 `plugins/feishu/channel.ts`：循环领卡片、发或改、报告；收到点击转给 `hub.answer`。协议在 `docs/protocol.md`，用别的语言写也行，只要会发 HTTP。
 
 ## 交付流水线
+
+Codeup / 云效 Flow 使用独立的 [`plugins/codeup`](../../examples/recipes/codeup/README.md) 流程，不使用 GitHub 的 `gh` 或 Ship Action。先生成项目登记和待合入规则，再配置云效令牌、目标分支交付设置、独立 CI 和飞书答复人。先跑独立 Codex CR，再跑 CI，两项通过后创建 MR，待飞书批准后合并。已有 main 触发部署时沿用 Codeup 的触发规则。不要把本地模拟通过当作真实 Codeup 合并或生产发布；未核实保护分支不能自动合并。飞书只验收使用 `events.verify` 与专用检查规则，保留已有开发路由。项目需要本机配置时，在可信登记中设置 `localEnv.file` 与 `keys`；MySQL 迁移验证使用 `mysqlMigration` 的独立空库。React、NestJS 的差异放在项目检查命令和发布流水线中，不进内核。
 
 需要这台接单电脑已有 `gh` 登录和审查程序。`delivery` 进程只执行本机插件和 main 指定的审查命令，PR 不检出、不在本机跑代码。先把项目的 `ops/delivery.json` 和审查要点放到 main：
 
@@ -256,3 +262,7 @@ Windows 用任务计划程序在本人登录后启动；通过 SSH 管理时仍�
 ## 版本与卸载
 
 `agent-autoloop --version` 显示版本和提交。`agent-autoloop uninstall` 确认后删除自身程序、链接和服务，规则、密钥和记录保留；`--yes` 只跳过确认。
+
+飞书自然语言任务摘要支持“确认”“取消”按钮，点击后更新卡片状态；文字确认和取消仍兼容。明确指令先由程序处理；口语确认或取消仅引导原卡片或明确指令，不能把模型识别结果当作批准。私聊模型读取同会话、同发送人最近八轮已回复的交流。旧摘要卡片失效后不能派发任务，详见[任务入口说明](../../examples/recipes/feishu-tasks/README.md)。
+
+本机管理看板为独立客户端，本人密钥登录后默认可写，展示用途加 `--readonly`；密钥不持久化到浏览器，会话 12 小时有效，可退出撤销。个人聊天默认本地保存与后台提取，`recordChats: false` 关闭；群聊与其他人不读取本人记忆。参见[看板](../../examples/recipes/live-dashboard/README.md)和[个人插件](../../examples/recipes/personal/README.md)。

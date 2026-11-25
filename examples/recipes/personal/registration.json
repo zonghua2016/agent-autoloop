@@ -1,0 +1,20 @@
+{
+  "config": "/absolute/private/project-personal.json",
+  "cwd": "/absolute/path/to/project",
+  "worker": "mac-mini",
+  "project": "demo",
+  "inputSource": "feishu-chat",
+  "developer": "codeup-demo-develop",
+  "developerEmits": { "source": "codeup-demo", "types": ["delivery.requested"] },
+  "feedbackSource": "codeup-demo",
+  "feedbackType": "delivery.feedback",
+  "channels": ["feishu"],
+  "chron": {
+    "day": "45 23 * * *",
+    "month": "0 7 1 * *",
+    "dream": "0 3 * * 0",
+    "concepts": "10 3 * * 0",
+    "improve": "30 3 * * 0",
+    "prune": "0 5 * * *"
+  }
+}

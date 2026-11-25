@@ -1,0 +1,59 @@
+html {
+  color-scheme: light dark;
+  font: 16px/1.6 system-ui;
+  background: light-dark(#f7f5f0, #171916);
+  color: light-dark(#242c27, #edf2ed);
+}
+body {
+  margin: 0;
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+}
+main {
+  box-sizing: border-box;
+  width: min(100%, 480px);
+  padding: 32px;
+}
+h1 {
+  font-size: 25px;
+}
+form {
+  display: grid;
+  gap: 12px;
+  margin: 28px 0;
+}
+input,
+button {
+  font: inherit;
+  box-sizing: border-box;
+  min-height: 44px;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+input {
+  width: 100%;
+  border: 1px solid #89958c;
+}
+button {
+  border: 0;
+  background: #365c45;
+  color: #fff;
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.6;
+}
+input:focus-visible,
+button:focus-visible {
+  outline: 3px solid #84b595;
+  outline-offset: 3px;
+}
+.hint {
+  font-size: 14px;
+  opacity: 0.75;
+}
+#login-status {
+  margin: 0;
+  min-height: 26px;
+}

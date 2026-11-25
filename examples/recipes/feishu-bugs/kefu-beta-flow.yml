@@ -1,0 +1,62 @@
+sources:
+  repo:
+    type: codeup
+    name: agent-autoloop-test
+    endpoint: "__REPOSITORY__"
+    branch: autoloop/acceptance
+    certificate:
+      type: serviceConnection
+      serviceConnection: "__CODEUP_CONNECTION__"
+stages:
+  preview:
+    name: 客服 beta 预览
+    jobs:
+      build:
+        name: 验证提交并发布测试产物
+        runsOn:
+          group: public/cn-beijing
+          container: build-steps-public-registry.cn-beijing.cr.aliyuncs.com/build-steps/alinux3:latest
+        steps:
+          build:
+            name: 构建指定的测试版本
+            step: Command
+            with:
+              run: |
+                set -eu
+                test "${AUTOLOOP_TARGET_ENV:-}" = test
+                git rev-parse HEAD | grep -Eq '^[a-f0-9]{40}$'
+                test "$(git rev-parse HEAD)" = "${AUTOLOOP_EXPECTED_SHA:?}"
+                tools_dir=$(mktemp -d)
+                node_dist=node-v24.10.0-linux-x64
+                (cd "$tools_dir" &&
+                  curl -fsSLO "https://nodejs.org/dist/v24.10.0/$node_dist.tar.xz" &&
+                  curl -fsSLO "https://nodejs.org/dist/v24.10.0/SHASUMS256.txt" &&
+                  grep "  $node_dist.tar.xz$" SHASUMS256.txt | sha256sum -c - &&
+                  tar -xf "$node_dist.tar.xz")
+                export PATH="$tools_dir/$node_dist/bin:$PATH"
+                npm install -g pnpm@9.12.2
+                pnpm install --frozen-lockfile
+                pnpm --filter kefu typecheck
+                test ! -e .autoloop-beta-upload && test ! -L .autoloop-beta-upload
+                out="$PWD/.autoloop-beta-upload/$AUTOLOOP_EXPECTED_SHA"
+                mkdir -p "$out"
+                for file in .env .env.local .env.test .env.test.local apps/activities/kefu/.env apps/activities/kefu/.env.local apps/activities/kefu/.env.test apps/activities/kefu/.env.test.local; do
+                  if test -f "$file" && grep -Eq '^[[:space:]]*(export[[:space:]]+)?NEXUS_ALI_OSS_' "$file"; then
+                    echo 'Unexpected OSS configuration in build inputs' >&2
+                    exit 1
+                  fi
+                done
+                unset NEXUS_ALI_OSS_BUCKET NEXUS_ALI_OSS_REGION NEXUS_ALI_OSS_ACCESS_KEY_ID NEXUS_ALI_OSS_ACCESS_KEY_SECRET
+                pnpm --filter kefu exec vite build --mode test --base "http://beta.standoff2.cn/autoloop-preview/kefu/flow/$AUTOLOOP_EXPECTED_SHA/" --outDir "$out"
+                test -s "$out/kefu_1789445784513.html"
+                find "$out" -type f -name '*.map' -delete
+                printf '{"commit":"%s","environment":"test","project":"agent-autoloop-test","app":"kefu"}\n' "$AUTOLOOP_EXPECTED_SHA" > "$out/version.json"
+          upload:
+            name: 上传客服 beta 验收目录
+            step: OSSUpload
+            with:
+              serviceConnection: "__OSS_CONNECTION__"
+              region: "__OSS_REGION__"
+              bucket: "__OSS_BUCKET__"
+              targetFilePath: web/standoff2/autoloop-preview/kefu/flow/
+              sourceFilePath: .autoloop-beta-upload/

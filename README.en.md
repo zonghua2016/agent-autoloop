@@ -1,5 +1,11 @@
 # Agent Autoloop
 
+The optional [personal agent recipes](examples/recipes/personal/README.md) add shared memory, reflection, care, deliberation with configured DSH, Antigravity CLI (`agy`), and Codex fallbacks, and bug intake. The project rule selects the development agent.
+
+Optional [Codeup / Flow delivery](examples/recipes/codeup/README.md) runs independent Codex review followed by Flow CI before opening a merge request. Every merge requires human approval of the exact commit. Projects without delivery configuration retain the local commit. Projects can load selected variables from a local dotenv file and run migrations against a temporary MySQL instance. React and NestJS supply their own check commands. Cloud credentials, branch gates and pipelines require configuration and real acceptance testing; existing GitHub delivery is unchanged.
+
+Optional [Feishu task intake](examples/recipes/feishu-tasks/README.md): the `feishu-tasks` channel combines existing decision cards with allowlisted private messages and explicit bot mentions in groups. It handles explicit controls without a model call and includes the last eight delivered private exchanges in interpretation. Natural confirmation or cancellation guides the owner to the current card or an explicit command; incomplete tasks keep their clarification question. It supports verification-only jobs and dispatches only after the sender confirms. Project paths and permissions remain in trusted rules; no `/v1` protocol changes are required.
+
 **Let your command-line agents pick up work and follow it through in the background — staying quiet when they can handle it, and sending you a card only when a decision is yours to make.**
 
 [中文](README.md) | **English**
@@ -269,3 +275,7 @@ Start reading at `bin/agent-autoloop.ts` → `cli/main.ts`, then follow the feat
 </details>
 
 [MIT License](LICENSE)
+
+Feishu task proposals now use Confirm/Cancel cards. Callbacks bind the original sender, exact message and proposal revision; stale or repeated clicks cannot dispatch another task. Text commands remain supported.
+
+The optional [local management dashboard](examples/recipes/live-dashboard/README.md) requires owner-key login, enables writes by default after login and supports `--readonly`; sessions expire after 12 hours and can be revoked by logging out. Seven stations show DeepSeek and Gemini together, with card, run, rule and private-draft controls.

@@ -1,0 +1,43 @@
+[
+  {
+    "id": "react-app",
+    "organization": "REPLACE_ORGANIZATION",
+    "repository": "REPLACE_ORGANIZATION/frontend/react-app",
+    "git": "https://codeup.aliyun.com/REPLACE_ORGANIZATION/frontend/react-app.git",
+    "cwd": "/absolute/path/react-app",
+    "workRoot": "/absolute/path/worktrees/react-app",
+    "branch": "main",
+    "api": "https://openapi-rdc.aliyuncs.com",
+    "tokenEnv": "YUNXIAO_TOKEN",
+    "serviceUserId": "",
+    "settingsPath": "ops/codeup-delivery.json",
+    "codex": "codex",
+    "developmentModel": "gpt-6-astra",
+    "commands": [
+      ["pnpm", "install", "--frozen-lockfile"],
+      ["pnpm", "typecheck"],
+      ["pnpm", "test"],
+      ["pnpm", "build"]
+    ]
+  },
+  {
+    "id": "nestjs-api",
+    "organization": "REPLACE_ORGANIZATION",
+    "repository": "REPLACE_ORGANIZATION/backend/nestjs-api",
+    "git": "https://codeup.aliyun.com/REPLACE_ORGANIZATION/backend/nestjs-api.git",
+    "cwd": "/absolute/path/nestjs-api",
+    "workRoot": "/absolute/path/worktrees/nestjs-api",
+    "branch": "main",
+    "api": "https://openapi-rdc.aliyuncs.com",
+    "tokenEnv": "YUNXIAO_TOKEN",
+    "serviceUserId": "",
+    "settingsPath": "ops/codeup-delivery.json",
+    "codex": "codex",
+    "developmentModel": "gpt-6-astra",
+    "commands": [
+      ["npm", "ci"],
+      ["npm", "test", "--", "--ci", "--runInBand"],
+      ["npm", "run", "build"]
+    ]
+  }
+]

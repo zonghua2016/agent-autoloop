@@ -128,7 +128,10 @@ else {
     },
   };
   try {
-    await feishu({ hub: hub as any, options: { lark }, log: () => {}, signal: stop.signal });
+    await feishu({ hub: hub as any, options: { lark }, log: () => {}, signal: stop.signal }, undefined, () => {
+      assert.ok(delivered > 0, "the hub receipt precedes optional hooks");
+      throw new Error("optional history unavailable");
+    });
     assert.deepEqual(failed, []);
     assert.equal(delivered, 2);
     assert.equal(requests, 3, "user lookup, send and patch each allowed HTTP to respond");

@@ -96,7 +96,7 @@ Claude 委托 Codex 的完整规则、Skill 和参数调用脚本见[浏览器�
 
 从 [hello-source/source.ts](../examples/plugins/hello-source/source.ts) 开始。它检查 `x-shop-signature` 中的 HMAC-SHA256，再把订单变成事件。
 
-默认导出同步函数，参数为 `{ headers, body, secret }`。先验签，再解析原文；返回事件数组，无事返回 `[]`，拒绝请求就抛异常。事件插件只翻译，不发请求。
+默认导出同步或异步函数，异步结果会在应答之前等待；参数为 `{ headers, body, secret }`。先验签，再解析原文；返回事件数组，无事返回 `[]`，拒绝请求就抛异常。事件插件只翻译，不发请求。
 
 在 `rules.json` 登记来源：
 
@@ -137,3 +137,11 @@ node --disable-warning=ExperimentalWarning --test tests/conformance.test.ts
 检查其他中台实现时，用 `agent-autoloop conformance <测试地址> --config <测试凭据文件>`，文件格式见[协议](protocol.md#一致性和复现)。它会写事件和卡片，只对专用测试中台运行。
 
 插件本身的完整接入测试见 [tests/example-plugins.test.ts](../tests/example-plugins.test.ts)。用其他语言写独立进程也可以，参考 [curl/jq 通道](../examples/channel.sh)和[接单程序](../examples/worker.sh)。
+
+## 可选业务插件之间的边界
+
+内核继续只收、分、派、记。现有 `plugins/<name>/{agent,channel,source}.ts` 发现方式不变，不增加全局 hook 或第二套注册表。组合插件按可信配置加载可选能力；没有配置 personal 或 delivery 的飞书入口不在运行时导入相应业务模块。
+
+Codeup 拥有自己的持久化结构，其他插件使用 `codeup/query.ts` 的 `deliveryRecord(home, project, subject)` 读取绑定到事项的交付视图，不拼接它的 SQL 或存储键。`develop` 的可选 `beforeCheck` 参数在独立 CR 和推送完成后、写检查前调用；Bug 表接入复用它建立验收 MR，不截取 fetch URL 判断业务阶段。接口可在恢复时再次调用，调用方使用已有 MR 意图与远端读回保证幂等。
+
+飞书卡片先向中台报告送达，再运行本地附加记录；附加记录失败不改写发送结果。个人续聊只收配置本人、notice 类型及可信规则名匹配的卡片；不按标题关键词认定来源。TaskStore 的读取和作用域读取都记录基线，保存时在事务中合并本地改动，保留异步等待期间已写入的进度、卡片消息编号和取消标记。

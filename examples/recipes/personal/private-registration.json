@@ -1,0 +1,16 @@
+{
+  "config": "/absolute/private/personal.json",
+  "cwd": "/absolute/private",
+  "worker": "mac-mini",
+  "channels": ["feishu-private"],
+  "chron": {
+    "day": "45 23 * * *",
+    "month": "0 7 1 * *",
+    "dream": "0 3 * * 0",
+    "concepts": "10 3 * * 0",
+    "morning": "30 8 * * *",
+    "巡检": "0 16 * * *",
+    "care": "30 17 * * *",
+    "prune": "0 5 * * *"
+  }
+}

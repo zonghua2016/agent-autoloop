@@ -68,6 +68,7 @@ test("the owner's cards say which matter they're about and what the asker left f
   const card = hub.stateOf(at(8)).cards.find((open: { title: string }) => open.title === ask.title)!;
   assert.equal(card.lane, "#77");
   assert.equal(card.about, ask.about);
+  assert.equal(card.runId, job.run);
 });
 
 test("status --json prints the same state the hub serves, and the plain output stays human", async () => {

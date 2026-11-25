@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>登录任务管理看板</title>
+    <link rel="stylesheet" href="./login.css" />
+  </head>
+  <body>
+    <main>
+      <h1>登录本机管理看板</h1>
+      <p>使用本机中台的本人密钥登录。密钥只用于此次验证，不保存在浏览器中。</p>
+      <form id="login" method="post" action="/api/login">
+        <label for="owner-key">本人密钥</label
+        ><input id="owner-key" type="password" autocomplete="off" required autofocus /><button type="submit" disabled>
+          登录
+        </button>
+        <p id="login-status" role="status"></p>
+      </form>
+      <p class="hint">会话有效期为 12 小时。只读启动的看板登录后仍为只读。</p>
+    </main>
+    <script type="module" src="./login.js"></script>
+  </body>
+</html>

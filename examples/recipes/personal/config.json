@@ -1,0 +1,30 @@
+{
+  "database": "/absolute/private/personal.db",
+  "scope": "private",
+  "timezone": "Asia/Shanghai",
+  "models": {
+    "dsh": { "use": "dsh", "program": "/absolute/path/to/dsh" },
+    "gemini": { "use": "gemini", "program": "/absolute/path/to/gemini" },
+    "claude": { "use": "claude" },
+    "gpt": { "use": "codex" }
+  },
+  "fallbackModels": ["dsh", "gpt"],
+  "roles": {
+    "chat": "claude",
+    "care": "claude",
+    "research": "gpt",
+    "backend": "gpt",
+    "operations": "gpt",
+    "frontend": "claude",
+    "architecture": "claude",
+    "agent": "claude",
+    "communication": "claude",
+    "planning": "gemini",
+    "office": "gemini",
+    "insights": "gemini",
+    "story": "gemini",
+    "evaluate": "gemini"
+  },
+  "recordChats": true,
+  "care": { "enabled": true, "proactive": false, "timezone": "Asia/Shanghai", "quietStart": 22, "quietEnd": 9 }
+}
