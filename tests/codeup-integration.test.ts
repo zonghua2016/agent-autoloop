@@ -247,7 +247,8 @@ test("sensitive paths retain Unicode and embedded newlines from Git", async () =
     git(root, "config", "core.quotePath", "true");
     git(root, "commit", "--allow-empty", "-m", "base");
     const base = git(root, "rev-parse", "HEAD");
-    const names = ["迁移.sql", "line\nbreak.sql"];
+    // Windows cannot create control characters in filesystem names; Unix exercises Git's newline case.
+    const names = ["迁移.sql", ...(process.platform === "win32" ? [] : ["line\nbreak.sql"])];
     for (const name of names) writeFileSync(join(root, name), "-- example\n");
     git(root, "add", ".");
     git(root, "commit", "-m", "sample");

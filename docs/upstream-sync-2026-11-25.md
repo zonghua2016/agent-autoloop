@@ -26,6 +26,12 @@
 
 仓库要求 main 合并前最终提交的 Ubuntu/macOS/Windows check 全部通过。因此候选先进入同步分支，待相同提交的检查和独立审查通过后再合入；保留同步前备份分支。没有发布新版本或修改上游仓库。
 
+## CI 与后续观察
+
+首次 Windows CI 暴露本地扩展测试的平台假设：飞书 CLI 的 shebang 假程序按现有 Unix 测试入口运行；Unicode 路径继续跨平台验证，换行文件名仅在允许它的 Unix 文件系统验证；多连接 SQLite 测试统一先关闭全部连接再删除目录；本地 Git remote 的测试重写使用 file URL，避免 Windows 盘符差异。真实 Windows 结果以最终 CI 为准。
+
+DeepSeek 两次审查均超时，未取得完整结论。其部分输出中，主控和独立 Codex 核实了一项后续观察：同一 Claude Agent 的并行轮次分别报告 T1、T2 恢复时间，并在 T1 前手动成功时，仅等待 T2 的轮次立即恢复，等待 T1 的旧轮次仍延迟到 T1；任务未丢失。DSH/agy 当前不产生 limitedUntil，不受此路径影响。按仓库对罕见组合的范围约束，本批记录而不扩改内核。其他关于空字段误判、跨来源事件冲突与 unknown 释放名额的推测，与字段标准化、按来源去重及已有计数代码不符，未采纳。
+
 ## 全部新增提交
 
 - `bfa6d79` chore(delivery): default Codex reviewer model gpt-6.2-sol (#336)

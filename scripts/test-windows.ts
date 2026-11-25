@@ -14,6 +14,7 @@ const unix = new Set([
   "delivery-run",
   "dsh",
   "example-plugins",
+  "feishu-tasks-cli",
   "examples",
   "install",
   "loop",

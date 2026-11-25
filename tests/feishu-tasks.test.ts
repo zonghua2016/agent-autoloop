@@ -59,7 +59,9 @@ function fixture(
   const dir = mkdtempSync(join(tmpdir(), "autoloop-feishu-tasks-"));
   const file = join(dir, "tasks.db");
   let store = new TaskStore(file);
+  const connections: TaskStore[] = [];
   t.after(() => {
+    for (const connection of connections) connection.close();
     store.close();
     rmSync(dir, { recursive: true, force: true });
   });
@@ -92,6 +94,11 @@ function fixture(
     ports,
     file,
     parsed: () => parsed,
+    openStore() {
+      const connection = new TaskStore(file);
+      connections.push(connection);
+      return connection;
+    },
     restart() {
       store.close();
       store = new TaskStore(file);
@@ -1092,8 +1099,7 @@ test("a reminder sent during reschedule parsing never gains a false reschedule a
   const now = new Date(2026, 10, 23, 8);
   f.inbox.receive(message("om_race_reminder", "今天9点提醒我开会"));
   await f.inbox.tick(now);
-  const store = new TaskStore(f.file);
-  t.after(() => store.close());
+  const store = f.openStore();
   f.ports.interpret = async () => {
     const target = store.reminderTarget(message("om_change", "请改成10点")).target!;
     store.reminderSent(target.message.message_id, target.reminder.at, "om_sent");
@@ -1146,8 +1152,7 @@ test("due reminders and terminal results continue while this chat's model waits"
 
 test("reaction removal retries after the durable reply without repeating the business response", async (t) => {
   const f = fixture(t);
-  const store = new TaskStore(f.file);
-  t.after(() => store.close());
+  const store = f.openStore();
   let starts = 0,
     ends = 0;
   const inbox = createInbox(config, store, {
@@ -1209,8 +1214,7 @@ test("rescheduling during an in-flight reminder preserves the new time and its d
 
 test("bounded maintenance eventually visits every chat", async (t) => {
   const f = fixture(t),
-    store = new TaskStore(f.file);
-  t.after(() => store.close());
+    store = f.openStore();
   for (let i = 1; i <= 5; i++)
     store.save({
       id: "fair" + i,
@@ -1232,8 +1236,7 @@ test("bounded maintenance eventually visits every chat", async (t) => {
 
 test("overlapping ticks keep result polling within its four-chat bound", async (t) => {
   const f = fixture(t),
-    store = new TaskStore(f.file);
-  t.after(() => store.close());
+    store = f.openStore();
   for (let i = 1; i <= 5; i++)
     store.save({
       id: "limit" + i,
