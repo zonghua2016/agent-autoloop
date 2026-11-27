@@ -14,6 +14,7 @@ import {
   type TaskConfig,
   type Ports,
 } from "../plugins/feishu-tasks/inbox.ts";
+import { renderProposal } from "../plugins/feishu-tasks/card.ts";
 import { readWorkItems } from "../plugins/feishu-tasks/work-items.ts";
 
 const config: TaskConfig = {
@@ -860,6 +861,10 @@ test("a historical task updates its confirmed card and status from the same deli
   f.inbox.receive(message("om_yes", "确认"));
   f.ports.outcome = async () => ({ runs: [{ state: "done", summary: "论证结束" }] });
   await f.inbox.tick();
+  const saved = f.openStore();
+  const old = saved.tasks()[0];
+  old.delivery = { title: "已合并", text: "旧版合并回执", verified: "old-proof", stage: "complete" };
+  saved.save(old);
   const changes: any[] = [];
   const result = { title: "已合并", text: "MR !1；CI 通过；CR 通过" };
   Object.assign(f.ports, {
@@ -1363,4 +1368,14 @@ test("ending an unheard verification round does not claim its process stopped", 
   assert.doesNotMatch(reply.text, /本轮已停止/);
   assert.match(reply.text, /进程可能还在/);
   assert.equal(f.inbox.proposals()[0].delivery?.title, "验收已结束");
+});
+
+test("task cards keep current delivery progress ahead of the original request and only a draft offers actions", () => {
+  const task = { task: "123456789abc", revision: "r1", text: "待确认任务 123456789abc\n检查帮助链接" };
+  for (const stage of ["review", "ci", "approval", "repair", "shipping", "complete"] as const) {
+    const card = renderProposal({ ...task, status: "finished", delivery: { stage, title: "进度", text: "最新进展" } });
+    assert.match(JSON.stringify(card.body.elements[0]), /最新进展/);
+    assert.doesNotMatch(JSON.stringify(card), /待确认任务|callback/);
+  }
+  assert.match(JSON.stringify(renderProposal({ ...task, status: "draft" })), /callback/);
 });

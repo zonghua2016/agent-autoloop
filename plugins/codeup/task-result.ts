@@ -6,7 +6,8 @@ export type DeliveryResult = {
   title: string;
   text: string;
   verified?: string;
-  stage?: "review" | "ci" | "repair" | "mr" | "approval" | "blocked" | "complete";
+  deploymentChecked?: true;
+  stage?: "review" | "ci" | "repair" | "mr" | "approval" | "blocked" | "shipping" | "complete";
 };
 export type TaskQuery = { event: number; message: string; sender: string; project: string; type: string };
 import { Codeup } from "./api.ts";
@@ -65,10 +66,22 @@ export function mergedResult(
     }
   }
   const pipeline = state.ciPipeline && state.ciRun ? `（运行 #${state.ciRun}）` : "";
+  const shipping = !!(state.deployExpected || state.deploySettings?.deploy || state.deployIntent || state.deployment);
+  const flow = state.deployment ? "Flow #" + state.deployment + " · " : "";
+  const deployment = state.live
+    ? "\n" + flow + "部署版本已核实：" + head
+    : shipping
+      ? "\n" + flow + "部署结果待核实"
+      : "";
   return {
-    title: "已合并",
-    text: `MR !${work.mr} 已合并到 ${p.branch}\n${mrUrl(p, work.mr!)}\nCI ${ci}${pipeline}\n独立 CR ${cr}\n提交 ${head}`,
-    ...(ci !== "待核实" && cr !== "待核实" && { verified: proofKey(p, work, state), stage: "complete" }),
+    deploymentChecked: true,
+    title: state.live ? "部署版本已核实" : "已合并",
+    text: `MR !${work.mr} 已合并到 ${p.branch}\n${mrUrl(p, work.mr!)}\nCI ${ci}${pipeline}\n独立 CR ${cr}\n提交 ${head}${deployment}`,
+    ...(ci !== "待核实" &&
+      cr !== "待核实" && {
+        verified: proofKey(p, work, state),
+        stage: shipping && !state.live ? "shipping" : "complete",
+      }),
   };
 }
 
@@ -82,6 +95,11 @@ function proofKey(p: Pick<Project, "git" | "branch" | "serviceUserId">, work: Wo
     state.merged,
     state.ciPipeline,
     state.ciRun,
+    state.deployExpected,
+    state.deploySettings?.deploy?.pipeline,
+    state.deployIntent,
+    state.deployment,
+    state.live,
   ]);
 }
 
@@ -190,17 +208,23 @@ export function codeupTaskResults(
           : { title: "尚无 MR", text: "已建立开发任务，尚无 MR 记录。" };
       }
       const mr = work.mr;
+      const blocker = allCards.find(
+        (card: any) =>
+          card.state === "open" &&
+          card.kind === "ask" &&
+          about(card).kind === "codeup-recovery" &&
+          about(card).project === p.id &&
+          about(card).mr === mr,
+      );
+      if (blocker?.text && !state?.live)
+        return {
+          title: state?.merged ? "部署需要处理" : "合并需要处理",
+          text: [state?.deployment && "Flow #" + state.deployment, String(blocker.text).slice(0, 1200)]
+            .filter(Boolean)
+            .join("\n"),
+          stage: "blocked",
+        };
       if (!state?.merged) {
-        const blocker = allCards.find(
-          (card: any) =>
-            card.state === "open" &&
-            card.kind === "ask" &&
-            about(card).kind === "codeup-recovery" &&
-            about(card).project === p.id &&
-            about(card).mr === mr,
-        );
-        if (blocker?.text)
-          return { title: "合并需要处理", text: String(blocker.text).slice(0, 1200), stage: "blocked" };
         if (state?.denied) return { title: "已取消合并", text: `MR !${mr} 的当前提交未获批准。`, stage: "complete" };
         const approval =
           state?.head &&
@@ -222,7 +246,7 @@ export function codeupTaskResults(
         };
       }
       const marker = proofKey(p, work, state);
-      if (previous?.verified === marker) return { ...previous, stage: "complete" };
+      if (previous?.verified === marker) return previous;
       const local = {
         title: "已合并",
         text: `MR !${mr} 的交付记录已登记合并。\n${mrUrl(p, mr)}\nCI、独立 CR 结果待核实。`,

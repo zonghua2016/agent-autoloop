@@ -20,7 +20,7 @@ import type { ResultConfig } from "../codeup/task-result.ts";
 export type InboxConfig = TaskConfig & {
   url: string;
   sourceKey: string;
-  parser: ParserConfig;
+  parser?: ParserConfig;
   modelRouting?: boolean;
   database?: string;
   delivery?: ResultConfig;
@@ -35,7 +35,8 @@ export async function runInbox(
   registerAction?: (handler: (event: unknown) => boolean) => void,
   registerDelivered?: (handler: (card: Card, ref: string, owner: string) => void) => void,
 ) {
-  if (!config.url || !config.sourceKey || !config.parser) throw new Error("飞书任务入口缺少中台来源或解析器配置");
+  if (!config.url || !config.sourceKey) throw new Error("飞书任务入口缺少中台地址或来源密钥");
+  const parser = config.parser ?? { use: "codex" };
   const stop = new AbortController();
   signal = AbortSignal.any([signal, stop.signal]);
   const store = new TaskStore(config.database ?? join(HOME, "feishu-tasks.db"));
@@ -121,12 +122,12 @@ export async function runInbox(
                 )
               : undefined,
         }),
-      parse: (input) => parseTask(input, config.parser, signal),
+      parse: (input) => parseTask(input, parser, signal),
       ...(config.modelRouting && {
         interpret: async (input, _message, selected, image) =>
           interpretMessage(
             input,
-            config.parser,
+            parser,
             signal,
             image ? await readMessageImage(program, image, signal) : undefined,
             selected,

@@ -63,11 +63,11 @@ test("a card shows its options while it's open, and what became of it after", ()
   assert.deepEqual(blocks[1].behaviors[0].value, { card: 5, choice: 1 });
   assert.equal(blocks[1].border_color, "blue", "what's recommended stands out");
   const said = (card: Card) => JSON.stringify(render(card).body.elements);
-  assert.match(said({ ...base, state: "decided", choice: 1 }), /你选了「留着」，已记录/);
+  assert.match(said({ ...base, state: "decided", choice: 1 }), /你的选择：留着/);
   assert.ok(!said({ ...base, state: "decided", choice: 1 }).includes("callback"));
-  assert.match(said({ ...base, state: "done", choice: 0, result: "删了" }), /你选了「删」。已执行：删了/);
-  assert.match(said({ ...base, state: "decided", answer: "归档" }), /你选了「归档」/);
-  assert.match(said({ ...base, state: "closed", result: "问题自己好了" }), /不用决定了：问题自己好了/);
+  assert.match(said({ ...base, state: "done", choice: 0, result: "删了" }), /处理结果：删了.*你的选择：删/);
+  assert.match(said({ ...base, state: "decided", answer: "归档" }), /你的回答：归档/);
+  assert.match(said({ ...base, state: "closed", result: "问题自己好了" }), /问题自己好了/);
   assert.match(said({ ...base, kind: "notice", state: "closed", options: [], result: "已处理" }), /已处理/);
   const noticeOpen = JSON.stringify(render({ ...base, kind: "notice", options: [] }).body.elements);
   assert.ok(noticeOpen.includes('"tag":"form"'), "a notice can take a line of your own");
@@ -607,7 +607,7 @@ test("GitHub: signed or not taken, and what it says becomes a plain event", () =
 });
 
 /** A Feishu channel handed these cards, with a lark-cli that refuses every update: what it ran, and what it told the hub. */
-async function refusedUpdates(given: Card[]) {
+async function refusedUpdates(given: Card[], updateOnlyRules: string[] = []) {
   const log = join(dir, "lark-patch.log");
   const lark = join(dir, "lark-patch");
   rmSync(log, { force: true });
@@ -645,7 +645,12 @@ esac
       return { changed: true };
     },
   };
-  await feishu({ hub: hub as any, options: { user: "ou_me", lark }, log: () => {}, signal: stop.signal });
+  await feishu({
+    hub: hub as any,
+    options: { user: "ou_me", lark, updateOnlyRules },
+    log: () => {},
+    signal: stop.signal,
+  });
   return { lines: readFileSync(log, "utf8").trim().split("\n"), calls };
 }
 
@@ -674,4 +679,33 @@ test("feishu: an open card that can't be updated isn't sent again, and a first m
   const [send] = first.lines.filter((l) => l.includes("+messages-send"));
   assert.ok(send.includes("--idempotency-key agent-autoloop-card-5 "), send);
   assert.deepEqual(first.calls, [["delivered", 5, 3, "om_new"]]);
+});
+
+test("settled clarification shows the actual result first and never paints a deferred repair as successful", () => {
+  const card = render({ ...base, state: "done", choice: 1, result: "未产生代码改动，没有创建 MR" });
+  assert.equal(card.header.template, "grey");
+  assert.match(JSON.stringify(card.body.elements[0]), /未产生代码改动/);
+  assert.doesNotMatch(JSON.stringify(card), /已执行|callback/);
+});
+
+test("the acceptance page and issue have labeled links, while reproduction instructions keep their original text", () => {
+  const url = "https://beta.test/preview/a/page";
+  const card = render({
+    ...base,
+    text: `测试页面：${url}\n缺陷详情（推荐在此操作）：https://project.feishu.cn/s/issue/detail/1\n复现步骤：点帮助(PC)\n预期结果：保留右括号`,
+  });
+  const body = JSON.stringify(card.body);
+  assert.match(body, /打开测试页面/);
+  assert.match(body, /点帮助\(PC\)/);
+  assert.ok(body.includes(url));
+});
+
+test("a tracked retest retries its original Feishu message when an update is refused", async () => {
+  const { lines, calls } = await refusedUpdates(
+    [{ ...base, rule: "验收", ref: "om_old", state: "closed", version: 2 }],
+    ["验收"],
+  );
+  assert.ok(lines.some((l) => l.includes("messages patch --message-id om_old")));
+  assert.ok(!lines.some((l) => l.includes("+messages-send")));
+  assert.deepEqual(calls, [["failed", 5, 2]]);
 });

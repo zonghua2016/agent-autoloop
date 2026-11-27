@@ -2,11 +2,12 @@ import {Vector3,MathUtils} from 'three';
 import {createParcel} from './models.js';
 import {live} from './live.js';
 import {agentRole,feishuDelivery,thinkRoles} from './roles.js';
+import {rememberLabelSizes} from './label-layout.js';
 const at={intake:['intake',0],hub:['intake',1],coder:['coder',1],think:['think',1],patrol:['patrol',1],card:['card',1],result:['result',1]};
 const tagName=item=>(item.type==='run'?'#'+item.id:item.type==='card'?'卡片 '+item.id:'事件 '+item.id)+' · '+item.label;
 export function makeLiveScene(scene,belts){
   const boxTags=document.getElementById('live-packages'),boxes=new Map(),latest=new Map(),queues=new Map(),names=new Map(),active=new Set(),counts={};
-  const sizes=new WeakMap(),observer=new ResizeObserver(entries=>{for(const entry of entries)sizes.set(entry.target,[entry.borderBoxSize?.[0]?.inlineSize??entry.contentRect.width,entry.borderBoxSize?.[0]?.blockSize??entry.contentRect.height]);});
+  const sizes=new WeakMap(),observer=new ResizeObserver(entries=>rememberLabelSizes(entries,sizes));
   let selection=null,roles={},hasFeishu=false;
   function box(){
     const parcel=createParcel(scene,.78);parcel.group.visible=false;
@@ -56,17 +57,23 @@ export function makeLiveScene(scene,belts){
     projected.copy(parcel.group.position);projected.y+=.84;projected.project(context.camera);
     const x=(projected.x*.5+.5)*context.w,y=(.5-projected.y*.5)*context.h+(index+1)*27;
     tag.hidden=projected.z>1||x<0||x>context.w||y<4||y>context.h-48||!!context.viewer&&context.viewer.id!==item.station||context.tracking&&item.key!==selection;
-    if(!tag.hidden){const [w,h]=sizes.get(tag)??[120,25];tag.style.transform=`translate(${Math.round(MathUtils.clamp(x-w/2,5,context.w-w-5))}px,${Math.round(y-h/2)}px)`;}
+    if(!tag.hidden){
+      const [w,h]=sizes.get(tag)??[120,25],left=MathUtils.clamp(x-w/2,5,context.w-w-5);
+      const top=[0,h+6,-h-6,2*(h+6),-2*(h+6)].map(offset=>y-h/2+offset).find(top=>
+        top>4&&top+h<context.h-48&&!context.labels.some(([a,b,c,d])=>left<a+c+5&&left+w+5>a&&top<b+d+5&&top+h+5>b));
+      tag.hidden=top===undefined;
+      if(top!==undefined){context.labels.push([left,top,w,h]);tag.style.transform=`translate(${Math.round(left)}px,${Math.round(top)}px)`;}
+    }
   }
   return {
-    paint(stamp,camera,w,h,{tracking=false,viewer=null,reduced=false}={}){
+    paint(stamp,camera,w,h,{tracking=false,viewer=null,reduced=false,labels=[]}={}){
       routesActive.clear();if(reduced){queues.clear();for(const traveler of travelers)traveler.motion=null;}
       const busy=new Set(travelers.filter(box=>box.motion).map(box=>box.motion.item.key));
       for(const traveler of travelers){
         if(traveler.motion&&stamp-traveler.start>=traveler.span){busy.delete(traveler.motion.item.key);traveler.motion=null;}
         if(!traveler.motion)for(const [key,queue] of queues){if(!busy.has(key)&&queue.length){traveler.motion=queue.shift();traveler.start=stamp;traveler.span=belts.curves[traveler.motion.route].getLength()/5*1000+180;busy.add(key);if(!queue.length)queues.delete(key);break;}}
       }
-      const context={stamp,camera,w,h,tracking,viewer};
+      const context={stamp,camera,w,h,tracking,viewer,labels};
       for(const [station,pool] of boxes){const items=(names.get(station)??[]).filter(item=>!busy.has(item.key));for(let i=0;i<pool.length;i++)display(pool[i],items[i],...at[station],context,i-1);}
       for(const traveler of travelers){const motion=traveler.motion;if(!motion){display(traveler,null,null,0,context);continue;}
         const t=MathUtils.clamp((stamp-traveler.start)/(traveler.span-180),0,1),u=t<.5?4*t*t*t:1-(-2*t+2)**3/2;

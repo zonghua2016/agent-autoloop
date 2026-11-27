@@ -3,7 +3,7 @@ import { dirname, isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Memory, localVector, type Entry } from "./memory.ts";
 import { care, collectBugs, deliberate, hash, type BugProvider, type Care, type Model } from "./workflow.ts";
-import { modelRunner, type ModelConfig } from "./model.ts";
+import { modelRunner, personalCandidates, type ModelConfig } from "./model.ts";
 import { hubClient } from "../../protocol/client.ts";
 import { receiptBlock } from "../delivery/input.ts";
 import { fitJson } from "../command/json.ts";
@@ -12,7 +12,7 @@ export type Config = {
   database: string;
   scope: string;
   timezone: string;
-  models: Record<string, ModelConfig>;
+  models?: Record<string, ModelConfig>;
   fallbackModels?: string[];
   roles?: Record<string, string>;
   care?: Care & { proactive: boolean };
@@ -66,18 +66,17 @@ export async function run(
   using db = new Memory(config.database);
   const scope = config.scope,
     day = key(config, now);
-  const call = invoke ?? modelRunner(config.models, config.fallbackModels, signal);
+  const models = config.models ?? { codex: { use: "codex" } };
+  const fallbackModels = personalCandidates(models, config.fallbackModels);
+  const call = invoke ?? modelRunner(models, fallbackModels, signal);
   const role = (name: string, fallback: string) => config.roles?.[name] ?? fallback;
-  const failover = !!config.fallbackModels?.length;
+  const failover = !!fallbackModels.length;
   const evaluate = (data: NonNullable<ReturnType<Memory["graph"]>>) => {
     const exclude = data.item.authorModel ?? (failover ? role("experience", "dsh") : undefined);
     return config.evaluation
-      ? modelRunner({ ...config.models, 独立评估: config.evaluation }, config.fallbackModels, signal)(
-          "独立评估",
-          "evaluate",
-          data,
-          { exclude },
-        )
+      ? modelRunner({ ...models, 独立评估: config.evaluation }, fallbackModels, signal)("独立评估", "evaluate", data, {
+          exclude,
+        })
       : call(role("evaluate", "gemini"), "evaluate", data, { exclude });
   };
   const embed = async (input: string): Promise<number[] | undefined> =>

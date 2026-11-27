@@ -43,6 +43,7 @@ export async function checkFlowCI(
   branch: string,
   head: string,
   ci: NonNullable<Settings["ci"]>,
+  recordCheck: Codeup["check"] = api.check.bind(api),
 ) {
   const pipeline = ci.pipeline,
     path = api.flow(pipeline),
@@ -106,12 +107,12 @@ export async function checkFlowCI(
   if (!["SUCCESS", "FAIL", "FAILED", "CANCELED", "CANCELLED"].includes(run.status)) return false;
   verifyCheckout(run, pipeline, id, repo, branch, head);
   if (run.status === "SUCCESS") {
-    await api.check(head, "autoloop-ci", "success", `Flow CI 通过，运行 ${id}`);
+    await recordCheck(head, "autoloop-ci", "success", `Flow CI 通过，运行 ${id}`);
     return true;
   }
   const log = await failureLogs(api, pipeline, id, run);
   if (!state.ciRetryOf && ["FAIL", "FAILED"].includes(run.status) && dependencyTimeout(log)) {
-    await api.check(head, "autoloop-ci", "failure", `依赖下载超时，准备自动重跑。\n${log}`);
+    await recordCheck(head, "autoloop-ci", "failure", `依赖下载超时，准备自动重跑。\n${log}`);
     state.ciRetryOf = id;
     state.ciRun = undefined;
     state.ciIntent = false;
@@ -121,6 +122,6 @@ export async function checkFlowCI(
     save();
     return false;
   }
-  await api.check(head, "autoloop-ci", "failure", log);
+  await recordCheck(head, "autoloop-ci", "failure", log);
   return true;
 }

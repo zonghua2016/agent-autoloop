@@ -1,3 +1,4 @@
+import {scheduledGroup} from './poll-groups.js';
 import {agentBrand,runStation} from './roles.js';
 import {controls,runActions,cardActions,ruleActions,links} from './manage.js';
 
@@ -196,7 +197,7 @@ function renderList() {
   panelView='list';q('detail-shell').hidden=true;rows.hidden=false;q('list-controls').hidden=false;
   q('panel-title').textContent=stationFilter?stations[stationFilter]:'轮次与待办';
   q('clear-station').hidden=!stationFilter;
-  for(const tab of panel.querySelectorAll('[data-filter]')){tab.setAttribute('aria-pressed',String(tab.dataset.filter===filter));const kind=tab.dataset.filter;tab.textContent=filters[kind]+' '+(kind==='health'?(snapshot?.lines.length??0):kind==='feishu'?(workView?.items.length??0):entries.filter(item=>kind==='active'?item.type==='run'&&activeStates.has(item.run.state):kind==='finished'?item.type==='run'&&!activeStates.has(item.run.state):item.type===(kind==='asks'?'card':'event')).length);}
+  for(const tab of panel.querySelectorAll('[data-filter]')){tab.setAttribute('aria-pressed',String(tab.dataset.filter===filter));const kind=tab.dataset.filter;if(kind==='feishu'&&!workView){tab.textContent=filters.feishu;continue;}tab.textContent=filters[kind]+' '+(kind==='health'?(snapshot?.lines.length??0):kind==='feishu'?(workView?.items.length??0):entries.filter(item=>kind==='active'?item.type==='run'&&activeStates.has(item.run.state):kind==='finished'?item.type==='run'&&!activeStates.has(item.run.state):item.type===(kind==='asks'?'card':'event')).length);}
   if(filter==='health'){renderHealth();return;}
   if(filter==='feishu'){
     renderWorkList();
@@ -216,11 +217,25 @@ function renderList() {
   if(stationFilter==='coder')summary.push('接单程序和 Agent 名称来自真实轮次');
   const output=summary.map(line=>node('p',line,'panel-note'));
   if(!shown.length)output.push(node('p',snapshot?'暂无'+filters[filter]+'记录':lastUpdate,'panel-note'));
+  const groups=new Map();
+  const openGroups=new Set([...rows.querySelectorAll('details[data-ticks][open]')].map(el=>el.dataset.ticks));
   for(const item of shown) {
+    const key=filter==='finished'&&!q('task-search').value.trim()?scheduledGroup(item.run):null;
     const button=node('button',null,'live-row');button.type='button';
     button.append(node('small',labelFor(item)+' · '+item.label),node('strong',item.title),node('span',time(item.at)+' · '+item.reason));
     button.addEventListener('click',()=>select(item.key,true));
-    output.push(button);
+    if(key===null){output.push(button);continue;}
+    let group=groups.get(key);
+    if(!group){group={buttons:[],item};groups.set(key,group);output.push(group);}
+    group.buttons.push(button);
+  }
+  for(const [key,group] of groups){
+    let row=group.buttons[0];
+    if(group.buttons.length>1){
+      row=node('details');row.dataset.ticks=key;row.open=openGroups.has(key);
+      row.append(node('summary',group.item.run.rule+' · '+group.buttons.length+' 轮 · '+group.item.reason),...group.buttons);
+    }
+    output[output.indexOf(group)]=row;
   }
   if(filter==='finished'&&olderBefore!=null) {
     const more=node('button','查看更多历史轮次');more.type='button';more.addEventListener('click',async()=>{
@@ -238,7 +253,7 @@ function section(title,text,where) {
   const block=node('section',null,'detail-section');const paragraph=node('p');paragraph.append(links(text??''));block.append(node('h3',title),paragraph);where.append(block);
 }
 function renderWorkList() {
-  panel.querySelector('[data-filter=feishu]').textContent=filters.feishu+' '+(workView?.items.length??0);
+  panel.querySelector('[data-filter=feishu]').textContent=filters.feishu+(workView?' '+workView.items.length:'');
   const output=[];
   if(workError)output.push(node('p',workError,'panel-note'));
   if(workView?.available===false)output.push(node('p','当前本机配置没有可读取的个人事项。','panel-note'));
@@ -392,10 +407,12 @@ body.addEventListener('focusout',()=>setTimeout(()=>{
 },0));
 q('task-search').addEventListener('input',renderList);q('project-filter').addEventListener('change',renderList);
 q('clear-station').addEventListener('click',()=>openList());
-q('browse').addEventListener('click',()=>openList());
-q('live-close').addEventListener('click',()=>{
+function closePanel() {
   clearResult();panel.hidden=true;detailRequest++;q('browse').setAttribute('aria-expanded','false');q('browse').focus();
-});
+}
+q('browse').addEventListener('click',()=>panel.hidden?openList():closePanel());
+q('live-close').addEventListener('click',closePanel);
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!panel.hidden)closePanel();});
 q('live-back').addEventListener('click',()=>{clearResult();detailRequest++;renderList();});
 q('history').addEventListener('click',()=>{if(selected)select(selected,true);});
 setInterval(()=>{if(!document.hidden)refresh();},30000);

@@ -1,0 +1,8 @@
+{
+  "profile": { "role": "前端", "projects": "*", "match": "owner" },
+  "views": {
+    "story": "https://project.feishu.cn/example/storyView/example-story",
+    "issue": "https://project.feishu.cn/example/issueView/example-issue"
+  },
+  "projects": { "demo": { "businessLine": "平台" } }
+}

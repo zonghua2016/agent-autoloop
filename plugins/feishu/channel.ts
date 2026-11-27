@@ -8,6 +8,7 @@ import { setTimeout as wait } from "node:timers/promises";
 import type { Card, ChannelContext } from "../../host/channels.ts";
 import { eachLine } from "../../host/lines.ts";
 import { commandLine } from "../../host/command.ts";
+import { detail, header, plain } from "./card-layout.ts";
 import { fit } from "../../worker/contract.ts";
 
 /** Feishu sends these values as JSON in a string, which may be empty. */
@@ -22,10 +23,13 @@ function safeJson(text: unknown): any {
 
 function outcomeOf(card: Card) {
   const chosen = card.choice === null ? card.answer : card.options[card.choice];
-  if (card.state === "decided") return `你选了「${chosen}」，已记录，等待处理。`;
-  if (card.state === "done") return `你选了「${chosen}」。${card.result ? `已执行：${card.result}` : "已执行。"}`;
-  if (card.state === "closed" && card.kind === "ask") return `不用决定了：${card.result ?? ""}`;
-  return card.state === "closed" && card.result ? card.result : null;
+  if (card.state === "open") return [];
+  return [
+    ...(card.result ? [plain("处理结果：" + card.result)] : []),
+    ...(card.state === "decided" ? [plain("回答已收到，等待后台处理。")] : []),
+    ...(card.kind === "ask" && chosen ? [plain((card.choice === null ? "你的回答：" : "你的选择：") + chosen)] : []),
+    ...(card.kind === "notice" && card.answer ? [plain("处理说明：" + card.answer)] : []),
+  ];
 }
 
 /** What lark-cli said, on one line and short enough for a log, without cutting a character in half. */
@@ -59,6 +63,7 @@ function explain(where: string, body: any, failure: Error | undefined, printed: 
 
 /** One card, as it looks now: the options while it's open, what became of it after. */
 export function render(card: Card) {
+  const open = card.state === "open";
   const outcome = outcomeOf(card);
   // Each option is a block across the card, its words wrapping: buttons in a row, one line high, cut long options off.
   const option = (label: string, index: number) => ({
@@ -71,11 +76,6 @@ export function render(card: Card) {
     behaviors: [{ type: "callback", value: { card: card.id, choice: index } }],
     elements: [{ tag: "div", text: { tag: "plain_text", content: label } }],
   });
-  const afterwards = outcome ? [{ tag: "markdown", content: `**${outcome}**` }] : [];
-  const noteSaid =
-    card.kind === "notice" && card.answer
-      ? [{ tag: "div", text: { tag: "plain_text", content: `处理说明：${card.answer}` } }]
-      : [];
   const notice = card.kind === "notice";
   // Both forms submit `note`; an ask uses it as the answer, a notice records it when closing the card.
   const textForm = [
@@ -90,13 +90,13 @@ export function render(card: Card) {
           rows: 2,
           auto_resize: true,
           max_length: 1000,
-          label: { tag: "plain_text", content: notice ? "处理说明（可不填）" : "选项都不合适，就直接写回答" },
+          label: { tag: "plain_text", content: notice ? "处理说明（可不填）" : "补充文字或网址" },
           label_position: "top",
           placeholder: {
             tag: "plain_text",
             content: notice
               ? "比如：已回复他视频下周发；或：群发广告，不用管"
-              : "写好点“提交文字”；写了再点选项，文字不会带上",
+              : "在这里填写，再点「提交文字」。点上方选项只会提交选项。",
           },
         },
         {
@@ -112,20 +112,35 @@ export function render(card: Card) {
   return {
     schema: "2.0",
     config: { update_multi: true, enable_forward: false },
-    header: {
-      title: { tag: "plain_text", content: card.title },
-      // Which rule or task it came from, in every state: cards from many places reach one person.
-      ...(card.rule && card.rule !== card.title
-        ? { subtitle: { tag: "plain_text", content: `来源：${card.rule}` } }
-        : {}),
-      template: card.state === "open" ? "blue" : card.state === "closed" ? "grey" : "green",
-    },
+    header: header(
+      card.title,
+      open ? "blue" : card.state === "decided" ? "orange" : "grey",
+      open
+        ? notice
+          ? "待处理"
+          : "待回复"
+        : card.state === "decided"
+          ? "已回复"
+          : card.state === "done"
+            ? "本轮已结束"
+            : card.kind === "ask"
+              ? "已结束"
+              : "通知",
+      card.rule && card.rule !== card.title ? "来源：" + card.rule : undefined,
+    ),
     body: {
       elements: [
-        ...(card.text ? [{ tag: "markdown", content: card.text }] : []),
-        ...(card.state === "open"
-          ? [...(notice ? textForm : []), ...card.options.map(option), ...(notice ? [] : textForm)]
-          : [...afterwards, ...noteSaid]),
+        ...outcome,
+        ...(!open && outcome.length && card.text ? [{ tag: "hr" }] : []),
+        ...detail(card.text),
+        ...(open
+          ? [
+              ...(card.text ? [{ tag: "hr" }] : []),
+              ...(notice ? textForm : []),
+              ...card.options.map(option),
+              ...(notice ? [] : textForm),
+            ]
+          : []),
       ],
     },
   };
@@ -136,6 +151,10 @@ export default async function feishu(
   onAction?: (event: unknown) => boolean | Promise<boolean>,
   onDelivered?: (card: Card, ref: string, owner: string) => void | Promise<void>,
 ) {
+  const updateOnlyRules = options.updateOnlyRules ?? [];
+  if (!Array.isArray(updateOnlyRules) || !updateOnlyRules.every((name) => typeof name === "string" && name.trim()))
+    throw new Error("updateOnlyRules 需填写只允许更新原消息的规则名称列表");
+  const originalOnly = new Set<string>(updateOnlyRules);
   const program = (options.lark as string | undefined) ?? "lark-cli";
   const lark = async (args: string[], input?: string) => {
     const ran = await new Promise<{ failure?: Error; stdout: string; stderr: string }>((resolve) => {
@@ -200,7 +219,7 @@ export default async function feishu(
           } catch (error) {
             // The bot may not be the sender of the message it is told to change, and Feishu refuses that outright. An open
             // card stays as it is: the hub only counts answers on the message it first heard of, whose buttons still work.
-            if (card.state === "open") throw error;
+            if (card.state === "open" || originalOnly.has(card.rule ?? "")) throw error;
             // A settled one has no buttons: a second card is worse than one, a card frozen at the version before the answer
             // is worse than both. The key has the version so that a retry of this one makes no third.
             log(`card ${card.id}: couldn't update ${ref} (${error}); sending it again`);

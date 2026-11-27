@@ -23,6 +23,12 @@ const instructions: Record<string, string> = {
   care: '参考 previous 和 today，避免重复问候、重复建议；用户已经恢复或不适合打扰时返回 {"skip":true}。根据明确记录的近况与偏好写一条简短关怀，可提供故事、音乐或学习选项。不要作出健康判断，不联系他人。只返回 {"text":"..."}。',
 };
 
+export function personalCandidates(models: Record<string, ModelConfig>, configured?: string[]): string[] {
+  if (configured !== undefined) return configured;
+  const entries = Object.entries(models);
+  return entries.length === 1 && entries[0][1].use === "codex" ? [entries[0][0]] : [];
+}
+
 export function modelRunner(
   models: Record<string, ModelConfig>,
   fallbackModels: string[] = [],

@@ -556,3 +556,38 @@ test("invalid extraction stops automatically and can be retried explicitly after
   await run(config, "extract", [], {}, now, async () => ({ entries: [] }));
   assert.deepEqual(JSON.parse(await run(config, "extract-failures", [], {}, now, invoke)), []);
 });
+
+test(
+  "a sole registered Codex answers the chat role when other tools are absent",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const { run } = await import("../plugins/personal/run.ts");
+    const dir = mkdtempSync(join(tmpdir(), "codex-only-"));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const program = join(dir, "codex");
+    writeFileSync(
+      program,
+      "#!" +
+        process.execPath +
+        "\nconsole.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify({text:'测试回复'})}}));console.log(JSON.stringify({type:'turn.completed'}));",
+      { mode: 0o700 },
+    );
+    const config = {
+      database: join(dir, "notes.db"),
+      scope: "test",
+      timezone: "UTC",
+      models: { local: { use: "codex", program } },
+      recordChats: false,
+    };
+    assert.equal(
+      await run(
+        config,
+        "chat",
+        [],
+        { events: [{ id: 1, type: "chat", subject: "sample", summary: "合成样例", detail: "合成样例" }] },
+        now,
+      ),
+      "测试回复",
+    );
+  },
+);

@@ -190,3 +190,13 @@ test("delivery reads authorized hub APIs without opening hub.db", async () => {
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("when deployment starts, the card tracks its run until the recorded version is verified", () => {
+  const pending = { ...state, deployIntent: true, deployment: "42" };
+  const result = mergedResult(project, work, pending, mr, checks, run);
+  assert.notEqual(result.stage, "complete");
+  assert.match(result.text, /42.*待核实/);
+  const live = mergedResult(project, work, { ...pending, live: true }, mr, checks, run);
+  assert.equal(live.stage, "complete");
+  assert.match(live.text, /版本已核实/);
+});

@@ -2,6 +2,8 @@
 
 The optional [personal agent recipes](examples/recipes/personal/README.md) add shared memory, reflection, care, deliberation with configured DSH, Antigravity CLI (`agy`), and Codex fallbacks, and bug intake. The project rule selects the development agent.
 
+The optional [Feishu Project plugin](examples/recipes/feishu-project/README.md) uses the official MCP client to list personal requirements and defects by assignee, role and business line. Space-wide polling also finds assigned bugs reported by coworkers. A registered development rule can send the owner an MR link after code review and CI pass. Optional acceptance rules follow manual merges through test deployment, verification, project updates, acceptance notifications and repair when a defect is reopened. A trusted browser retest report can start another acceptance round. Closing the defect in Feishu updates the original card.
+
 Optional [Codeup / Flow delivery](examples/recipes/codeup/README.md) runs independent Codex review followed by Flow CI before opening a merge request. Every merge requires human approval of the exact commit. Projects without delivery configuration retain the local commit. Projects can load selected variables from a local dotenv file and run migrations against a temporary MySQL instance. React and NestJS supply their own check commands. Cloud credentials, branch gates and pipelines require configuration and real acceptance testing; existing GitHub delivery is unchanged.
 
 Optional [Feishu task intake](examples/recipes/feishu-tasks/README.md): the `feishu-tasks` channel combines existing decision cards with allowlisted private messages and explicit bot mentions in groups. It handles explicit controls without a model call and includes the last eight delivered private exchanges in interpretation. Natural confirmation or cancellation guides the owner to the current card or an explicit command; incomplete tasks keep their clarification question. It supports verification-only jobs and dispatches only after the sender confirms. Project paths and permissions remain in trusted rules; no `/v1` protocol changes are required.
@@ -250,6 +252,7 @@ For automated workloads, providers generally recommend using API keys rather tha
 - [Security boundaries](SECURITY.md)
 - [Contributing and community](CONTRIBUTING.md)
 - [Development guidelines](AGENTS.md)
+- This fork: [Local extensions and architecture fixes](docs/architecture-implementation-2026-11-25.md) · [Upstream sync and final verification](docs/upstream-sync-2026-11-25.md) (Chinese)
 
 <details>
 <summary><strong>Repository layout</strong></summary>

@@ -1,4 +1,4 @@
-import { isAbsolute } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 
 export type Settings = {
   ci?: { pipeline: string; env: Record<string, string> };
@@ -68,13 +68,31 @@ export function projectSettings(raw: unknown): Settings {
   return x;
 }
 export function project(raw: unknown): Project {
-  const x = raw as Project;
+  const input = raw as Project;
+  const x = Object.assign(
+    {
+      branch: "main",
+      api: "https://openapi-rdc.aliyuncs.com",
+      tokenEnv: "YUNXIAO_TOKEN",
+      settingsPath: "ops/codeup-delivery.json",
+      codex: "codex",
+    },
+    input,
+  );
+  if (typeof x.git === "string" && x.repository === undefined)
+    x.repository = new URL(x.git).pathname.slice(1).replace(/\.git$/, "");
+  if (typeof x.cwd === "string" && typeof x.id === "string" && x.workRoot === undefined)
+    x.workRoot = join(dirname(x.cwd), ".autoloop-worktrees", x.id);
   if (
     !x ||
+    typeof x.id !== "string" ||
     !/^[a-z][a-z0-9-]*$/.test(x.id) ||
+    typeof x.organization !== "string" ||
     !/^[\w-]+$/.test(x.organization) ||
     !x.repository ||
+    typeof x.cwd !== "string" ||
     !isAbsolute(x.cwd) ||
+    typeof x.workRoot !== "string" ||
     !isAbsolute(x.workRoot)
   )
     throw new Error("Codeup 项目登记无效");

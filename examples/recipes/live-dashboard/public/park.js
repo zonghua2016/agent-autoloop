@@ -6,6 +6,7 @@ import { makeLiveScene } from './scene-live.js';
 import { live } from './live.js';
 import { stations } from './layout.js';
 import { connectWeather } from './weather.js';
+import { rememberLabelSizes } from './label-layout.js';
 
 const byId=id=>document.getElementById(id);
 const viewport=byId('viewport');
@@ -29,7 +30,7 @@ orbit.dampingFactor=.10;
 orbit.minPolarAngle=.42;
 orbit.maxPolarAngle=1.38;
 orbit.minDistance=10;
-orbit.maxDistance=72;
+orbit.maxDistance=100;
 orbit.enablePan=true;
 orbit.screenSpacePanning=false;
 const direction=new T.Vector3(15,24,31).normalize();
@@ -91,7 +92,7 @@ const clouds=buildClouds();
 
 const follow=byId('follow'), stationDetail=byId('station-detail');
 const reduced=matchMedia('(prefers-reduced-motion: reduce)');
-let tracking=false, transition=0, viewer=null;
+let tracking=false, transition=0, viewer=null, manualView=false, cameraReady=false;
 let weather={kind:'unknown',night:false}, night=0, winter=0, wet=0, cloud=0, fog=0;
 let updatedAt=0;
 const noActive=new Set();
@@ -104,7 +105,7 @@ const cloudySky=new T.Color(0xa4b6c3), rainySky=new T.Color(0x889eaf), wetNight=
 const park=document.querySelector('.park');
 connectWeather(value=>{weather=value;});
 
-const pinSizes=new WeakMap(),pinObserver=new ResizeObserver(entries=>{for(const entry of entries)pinSizes.set(entry.target,[entry.borderBoxSize?.[0]?.inlineSize??entry.contentRect.width,entry.borderBoxSize?.[0]?.blockSize??entry.contentRect.height]);});
+const pinSizes=new WeakMap(),pinObserver=new ResizeObserver(entries=>rememberLabelSizes(entries,pinSizes));
 const pins=stations.map(station=>{
   const el=document.createElement('button');el.type='button';el.className='pin';
   const dot=document.createElement('i');dot.setAttribute('aria-hidden','true');
@@ -113,22 +114,24 @@ const pins=stations.map(station=>{
   byId('pins').append(el);pinObserver.observe(el);return {el,station};
 });
 function overview() {
-  const radius=Math.max(30.3,31/camera.aspect);
-  return center.clone().addScaledVector(direction,Math.min(65,radius));
+  const radius=Math.max(33,40/camera.aspect);
+  return center.clone().addScaledVector(direction,Math.min(86,radius));
 }
 function resize() {
   const {width,height}=viewport.getBoundingClientRect();
   if(!width||!height)return;
   camera.aspect=width/height;camera.updateProjectionMatrix();renderer.setSize(width,height,false);
-  if(!tracking&&!viewer&&transition===0){
+  if(!cameraReady){
     camera.position.copy(overview());orbit.target.copy(center);orbit.update();
-  }
+    cameraReady=true;
+  }else if(!tracking&&!viewer&&!manualView)moveCamera();
   park.style.setProperty('--dock-height',document.querySelector('.dock').offsetHeight+'px');
 }
 document.addEventListener('keydown',event=>{
   if(event.key.toLowerCase()==='r'&&!/input|textarea|select/i.test(event.target.tagName)){tracking=false;selectStation(null);}
   if(event.key==='Escape'&&viewer)selectStation(null);
 });
+byId('reset-view').addEventListener('click',()=>{tracking=false;selectStation(null);});
 byId('fullscreen').addEventListener('click',async()=>{
   try {
     if(document.fullscreenElement)await document.exitFullscreen();
@@ -143,16 +146,20 @@ document.addEventListener('fullscreenchange',()=>{
 });
 function moveCamera() {
   transition=1;
-  orbit.enabled=false;
+  orbit.enabled=true;
   follow.setAttribute('aria-pressed',String(tracking||!!viewer));
   follow.textContent=tracking||viewer?'返回全景':'跟随包裹';
 }
 function selectStation(station) {
-  viewer=station;tracking=false;
+  viewer=station;tracking=false;manualView=false;
   stationDetail.hidden=!station;
   if(station){stationDetail.textContent=station.description;live.openList(station.id);}
   moveCamera();
 }
+orbit.addEventListener('start',()=>{
+  manualView=true;tracking=false;viewer=null;transition=0;orbit.minDistance=4.5;
+  stationDetail.hidden=true;follow.setAttribute('aria-pressed','false');follow.textContent='跟随包裹';
+});
 follow.addEventListener('click',()=>{
   if(viewer){selectStation(null);return;}
   tracking=!tracking;moveCamera();
@@ -210,6 +217,7 @@ function updatePins() {
     placed.push([x,y,bw,bh]);
     el.style.transform='translate('+Math.round(x)+'px,'+Math.round(y)+'px)';
   }
+  return placed;
 }
 function updateEnvironment(dt,seconds) {
   const weight=reduced.matches?1:1-Math.exp(-dt*2.4);
@@ -269,11 +277,11 @@ function frame(stamp) {
   updatedAt=stamp;
   updateCamera(dt);
   camera.updateMatrixWorld();
-  liveActive=tasks.paint(stamp,camera,viewport.clientWidth,viewport.clientHeight,{tracking,viewer,reduced:reduced.matches});
+  const labels=updatePins();
+  liveActive=tasks.paint(stamp,camera,viewport.clientWidth,viewport.clientHeight,{tracking,viewer,reduced:reduced.matches,labels});
   if(!reduced.matches)belts.update(stamp*.001,tasks.routes());
   updateEnvironment(dt,stamp/1000);
   renderer.render(scene,camera);
-  updatePins();
   if(firstPaint){firstPaint=false;byId('loading').hidden=true;}
 }
 new ResizeObserver(resize).observe(viewport);

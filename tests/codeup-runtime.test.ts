@@ -1,4 +1,5 @@
 // Run the real developer and delivery entry points over temporary Git and a local API, including answer/timer recovery.
+import { Store } from "../plugins/codeup/store.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { execFile } from "node:child_process";
@@ -42,6 +43,8 @@ test("React and NestJS enter through developer, real Git, HTTP, CR, approval, Fl
     let failRead = false;
     let failDeployment = false;
     let pendingCI = false;
+    let requireMRForChecks = false;
+    let verifiedFlowHead = "";
     let blockReview = false;
     server = createServer(async (req, res) => {
       try {
@@ -64,8 +67,13 @@ test("React and NestJS enter through developer, real Git, HTTP, CR, approval, Fl
         else if (path.endsWith("/repositories/17") && req.method === "GET") value = { id: 17 };
         else if (path.endsWith("/changeRequests") && req.method === "POST") {
           const head = git(repository, "rev-parse", body.sourceBranch);
-          assert.ok(checks.some((c) => c.name === "autoloop-cr" && c.headSha === head && c.conclusion === "success"));
-          assert.ok(checks.some((c) => c.name === "autoloop-ci" && c.headSha === head && c.conclusion === "success"));
+          if (requireMRForChecks) {
+            assert.equal(verifiedFlowHead, head);
+            assert.ok(calls.includes("POST /review"));
+          } else {
+            assert.ok(checks.some((c) => c.name === "autoloop-cr" && c.headSha === head && c.conclusion === "success"));
+            assert.ok(checks.some((c) => c.name === "autoloop-ci" && c.headSha === head && c.conclusion === "success"));
+          }
           assert.equal(body.sourceProjectId, 17);
           mr = {
             ...body,
@@ -94,6 +102,10 @@ test("React and NestJS enter through developer, real Git, HTTP, CR, approval, Fl
         else if (path.endsWith("/checkRuns") && req.method === "GET")
           value = checks.filter((c) => c.headSha === url.searchParams.get("ref"));
         else if (path.includes("/checkRuns") && req.method === "POST") {
+          if (requireMRForChecks && !mr) {
+            res.writeHead(400).end();
+            return;
+          }
           const prior = checks.find((c) => c.externalId === body.externalId);
           value = { ...body, id: prior?.id ?? ++nextCheck, writer: { id: "bot" } };
           checks = checks.filter((c) => c.id !== value.id);
@@ -124,6 +136,8 @@ test("React and NestJS enter through developer, real Git, HTTP, CR, approval, Fl
             value.status = "RUNNING";
             pendingCI = false;
           }
+          if (value.status === "SUCCESS" && path.includes("/pipelines/123/"))
+            verifiedFlowHead = value.globalParams.find((p: any) => p.key === "AUTOLOOP_EXPECTED_SHA").value;
         } else throw new Error(`Unexpected API ${req.method} ${path}`);
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify(value));
@@ -178,7 +192,7 @@ test("React and NestJS enter through developer, real Git, HTTP, CR, approval, Fl
       import {runDelivery,loadProject,execute} from ${JSON.stringify(new URL("../plugins/codeup/runtime.ts", import.meta.url).href)};
       const [mode,registry,id]=process.argv.slice(2);
       const request=async(url,init)=>fetch(new URL(new URL(url).pathname+new URL(url).search,'http://127.0.0.1:${address.port}'),{...init,headers:{...init?.headers,'x-yunxiao-token':'fake-test-token'}});
-      if(mode==='develop'||mode==='clarify') console.log(await develop(registry,id,{request,beforeCheck:async proof=>{
+      if(mode==='develop'||mode==='clarify') console.log(await develop(registry,id,{notifyMR:id==="nestjs",request,beforeCheck:id==="nestjs"?undefined:async proof=>{
         if(!/^[a-f0-9]{40}$/.test(proof.head)||!proof.gate.reviewed||proof.gate.findings?.length||proof.pushed!==proof.head)throw Error('precheck received unverified work');
         writeFileSync(${JSON.stringify(join(root, "precheck-proof"))},JSON.stringify(proof));
       },review:async()=>{
@@ -225,13 +239,23 @@ test("React and NestJS enter through developer, real Git, HTTP, CR, approval, Fl
         ),
       );
     };
+    const evidence = {
+      testPage: "https://beta.test/preview/v/page",
+      testedCommit: "a".repeat(40),
+      issueLink: "https://project.test/issue/1",
+    };
+    const evidenceStore = new Store(join(root, "home", "nestjs", "codeup.db"));
+    evidenceStore.put("verification:nestjs:needs-contract", evidence);
+    evidenceStore.close();
     const question = await run("clarify", "nestjs", {
       events: [{ id: 10, subject: "needs-contract", summary: "变更 SDK 接口" }],
     });
     const clarification = JSON.parse(/```agent-autoloop\n([\s\S]*?)\n```/.exec(question)![1]);
     const validated = parseResult({ outcome: "done", ...clarification });
     assert.deepEqual(validated.ask?.[0].options, ["已补充，继续", "暂不处理"], question);
-    assert.equal(validated.ask?.[0].text, "请提供平台字段");
+    assert.ok(validated.ask?.[0].text.includes("请提供平台字段"));
+    assert.ok(validated.ask?.[0].text.includes(evidence.testPage));
+    assert.ok(validated.ask?.[0].text.includes(evidence.testedCommit));
     const binding = JSON.parse(validated.ask![0].about!);
     assert.equal(binding.work, "nestjs:needs-contract");
     assert.equal(binding.clarify, true);
@@ -249,6 +273,8 @@ test("React and NestJS enter through developer, real Git, HTTP, CR, approval, Fl
       }
       mr = undefined;
       checks = [];
+      requireMRForChecks = id === "nestjs";
+      verifiedFlowHead = "";
       loseCreateResponse = true;
       pendingCI = true;
       const start = calls.length;
@@ -259,7 +285,8 @@ test("React and NestJS enter through developer, real Git, HTTP, CR, approval, Fl
         decided: [{ text: "PRIVATE_DECISION_SENTINEL" }],
       });
       assert.match(waiting, /等待.*CI/);
-      assert.equal(JSON.parse(readFileSync(join(root, "precheck-proof"), "utf8")).project.id, id);
+      if (!requireMRForChecks)
+        assert.equal(JSON.parse(readFileSync(join(root, "precheck-proof"), "utf8")).project.id, id);
       assert.equal(mr, undefined);
       const round = calls.slice(start);
       assert.ok(
@@ -293,6 +320,22 @@ test("React and NestJS enter through developer, real Git, HTTP, CR, approval, Fl
         answers: [{ choice: 0, about: retry.ask[0].about }],
       });
       assert.match(developed, /MR 7/);
+      const notices = JSON.parse(/```agent-autoloop\n([\s\S]*?)\n```/.exec(developed)![1]).notice ?? [];
+      if (id === "nestjs") {
+        assert.equal(notices.length, 1);
+        assert.ok(notices[0].text.includes("https://codeup.aliyun.com/org/demo/change/7"));
+        assert.ok(notices[0].fyi);
+      } else assert.deepEqual(notices, []);
+
+      for (const name of ["autoloop-cr", "autoloop-ci"])
+        assert.ok(
+          checks.some(
+            (c) =>
+              c.name === name &&
+              c.headSha === git(repository, "rev-parse", mr!.sourceBranch) &&
+              c.conclusion === "success",
+          ),
+        );
       assert.match(mr!.description, /增加功能/);
       assert.match(mr!.description, /支持新增条目/);
       assert.doesNotMatch(mr!.description, /PRIVATE_.*_SENTINEL|"answers"|"open"|"decided"/);

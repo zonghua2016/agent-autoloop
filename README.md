@@ -148,6 +148,8 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 
 更多模板：[Claude 委托 Codex 处理网页](examples/recipes/browser-handoff/README.md)、[每周代码清理](examples/skills/weekly-sweep/SKILL.md)。
 
+可选的[飞书项目插件](examples/recipes/feishu-project/README.md)通过官方 MCP 读取本人负责的需求和缺陷，可按空间轮询分给本人的前端缺陷，按开工状态交给登记的开发仓库，CR 和 CI 通过后私发 MR 链接。启用测试验收规则后，人工合并会启动测试部署，在缺陷详情记录进度、通知验收，关单或重开后同步跟进。接入网页复验报告后，后台会按测试版本发复验卡，飞书关单后自动更新原卡。
+
 ## 插件体系：四个方向都能自由替换
 
 内置插件随程序安装，填好配置即可启用；第三方插件用 `agent-autoloop add <git 地址>` 安装。
@@ -248,6 +250,7 @@ Apple M5 Pro、24 GB、Node 24.21.0。写入逐条提交，事务落盘后才应
 - [安全边界说明](SECURITY.md)
 - [参与贡献与交流](CONTRIBUTING.md)
 - [项目开发约定](AGENTS.md)
+- 本 fork：[本地扩展与架构修复记录](docs/architecture-implementation-2026-11-25.md) · [上游同步与最终验收](docs/upstream-sync-2026-11-25.md)
 
 <details>
 <summary><strong>仓库目录</strong></summary>

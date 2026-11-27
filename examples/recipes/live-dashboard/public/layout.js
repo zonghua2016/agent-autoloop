@@ -16,7 +16,7 @@ export const routes = {
   card: [docks.coder,[8.09,-2.30],[9.39,-1.40],[9.33,.27],[8.40,1.42],[6.40,1.62],[5.03,2.66],[3.90,4.08],[2.76,4.49],docks.card],
   answer: [docks.card,[-1.79,4.62],[-3.14,4.20],[-3.13,3.04],[-2.06,2.31],docks.hub],
   think: [docks.hub,[-3,.2],[-4.9,-1.3],docks.think],
-  thinkCard: [docks.think,[-8,-1],[-7.8,4.7],[-3.4,5.5],docks.card],
+  thinkCard: [docks.think,[-9,-1.6],[-12,0],[-12,4.8],[-9,6.4],[-4.5,6.1],docks.card],
   thinkResult: [docks.think,[-5.5,-4.1],[-3.6,-5.25],docks.result],
   patrolResult: [docks.patrol,[10,6.2],[11,-3,1.25],[4,-7.8,1.25],docks.result],
   result: [docks.coder,[5.38,-2.92],[4.25,-3.96],[3.12,-5.02],[1.95,-5.72],[.33,-5.56],docks.result]

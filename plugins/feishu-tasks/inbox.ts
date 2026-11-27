@@ -44,7 +44,8 @@ export type DeliveryResult = {
   title: string;
   text: string;
   verified?: string;
-  stage?: "review" | "ci" | "repair" | "mr" | "approval" | "blocked" | "complete";
+  deploymentChecked?: true;
+  stage?: "review" | "ci" | "repair" | "mr" | "approval" | "blocked" | "shipping" | "complete";
 };
 export type ParsedMessage = Plan | { intent: "new"; plan: Plan } | { intent: "chat"; reply: string };
 export type ModelIntent =
@@ -493,7 +494,7 @@ export function createInbox(config: TaskConfig, store: TaskStore, ports: Ports) 
   }
   async function refresh(task: Task) {
     if (
-      task.delivery?.stage === "complete" ||
+      (task.delivery?.stage === "complete" && (!task.delivery.verified || task.delivery.deploymentChecked)) ||
       !ports.delivery ||
       task.event === undefined ||
       !task.plan?.kind ||

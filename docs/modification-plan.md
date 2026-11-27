@@ -1,6 +1,6 @@
 # 修改建议汇总与五阶段实现记录
 
-日期：2026-11-23。综合桌面的《个人记忆&关怀系统修改》《Agent-auto-loop 架构修改建议》及用户随后指定的五阶段 implementation_plan。最终取舍：本机管理默认可写，一次完成五阶段并验证。起点为 main / 5eb4be8；仓库已有大量未提交插件和看板内容，本次保留原有工作，没有提交、推送或上线。
+实施日期：2026-11-23。这是五阶段的实现与验收记录，不是待执行计划。综合《个人记忆&关怀系统修改》《Agent-auto-loop 架构修改建议》及用户指定的五阶段方案，保留本机管理默认可写。起点为 main / 5eb4be8 的既有工作树；相关代码随后纳入 `46a92da`。后续[架构修复](architecture-implementation-2026-11-25.md)和[上游同步](upstream-sync-2026-11-25.md)已进入本地及 fork 的 main；提交、CI 和部署边界见同步记录。
 
 ## 汇总结论
 
@@ -35,4 +35,4 @@ Gemini 实际通过 agy 完成独立体验审查，采纳夜景对比度、窄�
 
 真实 Chrome 使用独立临时 profile 和本地假中台，验证页面渲染、DeepSeek/Gemini 共存、桌面与390px窄屏、夜景及管理表单。飞书使用假 CLI，核对消息、Reaction 增删、确认、来源派发与结果回复；Codeup 使用临时 Git 和本地假 HTTP。未开第二条真实飞书监听，未发送真人通知。
 
-最终全量命令为 `node --disable-warning=ExperimentalWarning --test --test-concurrency=2 tests/*.test.ts`（与 npm test 相同文件，限制本机并发）：940项，919通过、21按环境跳过、0失败。随后对最后的并发上限保护追加回归：飞书与个人插件71/71通过；看板、假飞书CLI与个人插件另测37/37通过。`npm run typecheck`、`npm run format:check`、`git diff --check` 通过。`npm run test:nightly` 通过，1000次强杀、33/33变异检出。浏览器实测文字/选项回答、结案、停止轮次、暂停/恢复、立即运行、补跑、草稿取消、只读模式及轮询保留输入；390px页面无横向溢出。跨平台 CI、真实飞书/Codeup 生产链路和外部模型长期运行未在本次执行；没有合并或发布。
+本阶段全量命令为 `node --disable-warning=ExperimentalWarning --test --test-concurrency=2 tests/*.test.ts`（与 npm test 相同文件，限制本机并发）：940项，919通过、21按环境跳过、0失败。随后对最后的并发上限保护追加回归：飞书与个人插件71/71通过；看板、假飞书CLI与个人插件另测37/37通过。`npm run typecheck`、`npm run format:check`、`git diff --check` 通过。`npm run test:nightly` 通过，1000次强杀、33/33变异检出。浏览器实测文字/选项回答、结案、停止轮次、暂停/恢复、立即运行、补跑、草稿取消、只读模式及轮询保留输入；390px页面无横向溢出。这些结果属于当时的实现批次；后续跨平台 CI 见同步记录。真实飞书/Codeup 生产链路和外部模型长期运行不在本记录的验收范围内。

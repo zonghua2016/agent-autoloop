@@ -43,6 +43,7 @@ export type State = {
   ciRetryOf?: string;
   ciPipeline?: string;
   deploySettings?: Settings;
+  deployExpected?: boolean;
   denied?: string;
   deployIntent?: boolean;
   deployment?: string;
@@ -159,6 +160,7 @@ export async function deliver(io: DeliveryIO, state: State, answers: Answer[]): 
   if (mr.status === "CLOSED" || mr.status === "UNDER_DEV")
     return { phase: "blocked", summary: "MR 已关闭或仍为草稿，未交付" };
   if (mr.status === "MERGED") {
+    state.deployExpected = !!(state.deploySettings?.deploy || settings.deploy);
     state.merged = mr.merged;
     io.save(state);
   }
@@ -250,6 +252,7 @@ export async function deliver(io: DeliveryIO, state: State, answers: Answer[]): 
     }
     const merged = await io.mr();
     if (merged.status !== "MERGED" || !/^[a-f0-9]{40}$/.test(merged.merged)) throw new Error("Codeup 尚未确认合并提交");
+    state.deployExpected = !!(state.deploySettings?.deploy || settings.deploy);
     state.merged = merged.merged;
     io.save(state);
   }

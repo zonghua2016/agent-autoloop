@@ -1,0 +1,26 @@
+{
+  "issue": "7183560536",
+  "mr": 8,
+  "sha": "50c76e5343db549d2ccf7c1610350256211059f1",
+  "page": "http://beta.standoff2.cn/autoloop-preview/kefu/flow/50c76e5343db549d2ccf7c1610350256211059f1/kefu_1789445784513.html",
+  "testedAt": "2026-11-27T04:16:51.623Z",
+  "browser": "158.0.8127.37",
+  "fixture": "仅覆盖本浏览器收到的测试公告正文，真实版本页面、脚本和新标签导航",
+  "results": [
+    {
+      "scenario": "single",
+      "expected": "https://example.org/help/Guide_(PC)",
+      "actual": "https://example.org/help/Guide_(PC)"
+    },
+    {
+      "scenario": "pair",
+      "expected": "https://example.org/help/Guide_(PC)",
+      "actual": "https://example.org/help/Guide_(PC)"
+    },
+    {
+      "scenario": "pair",
+      "expected": "https://example.org/second",
+      "actual": "https://example.org/second"
+    }
+  ]
+}

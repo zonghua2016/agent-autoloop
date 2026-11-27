@@ -10,7 +10,23 @@
 
 ## 可信配置
 
-1. 在接单机器准备 `projects.json`，参照本目录示例。登记仓库、工作目录、worktree 根目录、检查命令和令牌的**环境变量名称**，不写令牌值。`serviceUserId` 是实际写入 CR/CI 检查的云效用户 ID。
+已有接单机新增项目，只需在项目清单登记以下信息。运行时与配置生成器使用同一份默认值：
+
+```json
+{
+  "id": "demo",
+  "organization": "org",
+  "git": "https://codeup.aliyun.com/org/team/demo.git",
+  "cwd": "/absolute/path/demo",
+  "serviceUserId": "写入检查的用户ID",
+  "developmentModel": "本机可用的 Codex 模型",
+  "commands": [["npm", "ci"], ["npm", "test"]]
+}
+```
+
+示例中的组织标识和 Git 地址请替换为实际值。默认从 URL 取仓库路径，目标分支为 `main`，工作树放在项目同级的 `.autoloop-worktrees/<id>`。默认使用 `codex`、中心版 API、`YUNXIAO_TOKEN` 和目标分支上的 `ops/codeup-delivery.json`。验收分支等不同值须显式登记。首次接入的仓库需准备可信交付配置、CI 流水线、检查写入者与保护分支。下列生成器会一次产出规则和飞书项目映射。
+
+1. 在接单机器准备 `projects.json`，参照本目录示例。登记仓库、工作目录、检查命令等必填项。自定义工作树路径用 `workRoot`；自定义令牌通过 `tokenEnv` 填**环境变量名称**。`serviceUserId` 是实际写入 CR/CI 检查的云效用户 ID。
 2. 在业务仓库目标分支提交 `ops/codeup-delivery.json`，参照 `delivery.json`。CI pipeline 的 `0` 必须替换为真实的**检查流水线**编号。`checks[].writers` 填允许写入检查的用户 ID。
 3. 前端采用 `react-ci.json`，NestJS 采用 `nestjs-ci.json`，按项目实际脚本调整。它们是模板，不能假设每个 React 项目都有相同命令。避免在 CI 使用 `lint --fix`、会写文件的 format 或生产数据库测试。
 4. 在首选通道登记飞书答复人。每个 MR 都须批准当前提交和目标分支，才会请求 Codeup 合并。
@@ -46,7 +62,9 @@
 把令牌通过运行服务的环境注入，例如环境变量 `YUNXIAO_TOKEN`。终端 export 不代表 launchd 服务会继承它；应在私有启动包装脚本中读取权限为 0600 的本地 env 文件，再 exec 原来的启动程序。开发和 CR 子进程会移除云效及中台凭据环境变量，但这不是完整的操作系统级凭据隔离；生产环境仍应分别管理开发、检查和发布身份。
 
 ```sh
-node plugins/codeup/doctor.ts /absolute/path/projects.json
+node plugins/codeup/doctor.ts /absolute/path/projects.json --project demo
+# 应用生成的配置后，可选只读联通核对
+node plugins/codeup/doctor.ts /absolute/path/projects.json --project demo --home /absolute/hub-home --online
 node plugins/codeup/configure.ts /absolute/path/projects.json mac-mini /absolute/path/pending
 ```
 
@@ -56,7 +74,7 @@ node plugins/codeup/configure.ts /absolute/path/projects.json mac-mini /absolute
 
 ## Flow 检查流水线
 
-新建独立的检查流水线，禁止包含 OSS 正式上传、主机部署、生产凭据或生产数据库访问。构建机使用 Node 24+；按业务需要安装对应 pnpm/npm。Flow 检查本次工作的源分支。开发先独立审查本地提交，CR 通过后推送该分支启动 CI。等待 CI 时结束本轮，由定时复查续接。两项检查通过后才创建 MR。缺交付设置、CI 流水线或交付凭据时保留本地提交并跳过自动交付。无效配置会报错。
+新建独立的检查流水线，禁止包含 OSS 正式上传、主机部署、生产凭据或生产数据库访问。构建机使用 Node 24+；按业务需要安装对应 pnpm/npm。Flow 检查本次工作的源分支。开发先独立审查本地提交，CR 通过后推送该分支启动 CI。等待 CI 时结束本轮，由定时复查续接。普通开发入口在独立 CR 和实际检出的提交通过 Flow CI 后创建 MR，再把两项结果登记到该 MR 的源提交并回读。云效要求提交已属于 MR 才接受检查记录。有预建审查 MR 的试点继续直接登记。缺交付设置、CI 流水线或交付凭据时保留本地提交并跳过自动交付。无效配置会报错。
 
 在流水线内安装可信版本的本工具，固定到已审查的提交；从目标分支获得受信的 CI profile（不是直接执行 MR 修改后的 profile），再执行：
 
@@ -74,7 +92,9 @@ monorepo 可以先全量检查，确认正确后再按依赖图缩小范围；�
 
 飞书点「批准当前提交」后，Autoloop 重新核对 head、base 和 Codeup 原生门禁，再请求合并。新提交或 main 变化会使批准失效。取消决定对当前 head/base 持久保存。原有 `autoMerge` 和 `sensitive` 配置仍可读取。所有 Codeup 合并均需本人批准。
 
-独立 CR 使用临时只读快照、独立 Codex 会话，禁用记忆且不读取用户配置。发现问题交回原开发 worktree 返修。MR 描述只摘取原事件的 summary/detail，不复制任务上下文中的 answers、open、decided 等历史记录；超长摘要注明截短。MR 已经存在时保留原 MR，新提交重新检查。三轮 CR 后仍有问题，交回本人重新判断方案。同一提交不会仅通过重跑 CR 消除已报问题。CI 失败也触发返修；主干推进则先同步目标，再重测重审。合并使用 ff-only，不删除源分支。
+独立 CR 使用临时只读快照、独立 Codex 会话，禁用记忆且不读取用户配置。Codeup 保持 `{"findings":[{"title":"问题位置与标题","text":"触发条件与后果"}]}` 合约，只有空列表表示通过；每条发现必须有非空 title/text，发现问题交回原开发 worktree 返修。GitHub delivery 的两级发现与两轮负责人决策不适用于 Codeup；审查模型沿用目标分支配置中的显式 `review.model`。
+
+MR 描述只摘取原事件的 summary/detail，不复制任务上下文中的 answers、open、decided 等历史记录；超长摘要注明截短。MR 已经存在时保留原 MR，新提交重新检查。三轮 CR 后仍有问题，交回本人重新判断方案。同一提交不会仅通过重跑 CR 消除已报问题。CI 失败也触发返修；主干推进则先同步目标，再重测重审。合并使用 ff-only，不删除源分支。
 
 ## Flow 发布流水线
 
